@@ -3,7 +3,8 @@ from datetime import date
 from dotenv import load_dotenv
 from modules.scanner import get_rewarded_markets
 from modules.maker import colocar_ordenes, revisar_y_repostear, ordenes_activas, _guardar_ordenes, cancelar_todas
-from modules.risk import puede_entrar, registrar_entrada, registrar_salida
+from modules.risk import puede_entrar, registrar_entrada, registrar_salida, _cargar, capital_disponible
+from modules.notifier import notify_entrada, notify_reposteo, notify_salida, notify_error
 from config import SCAN_INTERVAL
 
 load_dotenv()
@@ -46,27 +47,41 @@ def run():
 
             # Liberar capital de mercados que ya no están en el scan
             token_ids_activos = {m["token_id"] for m in mercados}
+            capital_en_uso = _cargar()
+
             for token_id in list(ordenes_activas.keys()):
                 if token_id not in token_ids_activos:
+                    nombre = ordenes_activas[token_id].get("question", token_id[:20])
+                    capital_lib = capital_en_uso.get(token_id, 0.0)
                     registrar_salida(token_id)
                     del ordenes_activas[token_id]
                     _guardar_ordenes(ordenes_activas)
-                    logging.info(f"[SALIDA] Mercado {token_id[:20]} ya no está en scan — capital liberado")
+                    notify_salida(nombre, capital_lib)
+                    log_evento(
+                        tipo="salida",
+                        mercado=nombre,
+                        detalle=f"capital liberado={capital_lib:.2f} USDC"
+                    )
+                    logging.info(f"[SALIDA] {nombre} — capital liberado: {capital_lib:.2f} USDC")
 
             for m in mercados[:3]:
                 token_id = m["token_id"]
                 question = m["question"][:50]
 
                 if token_id in ordenes_activas:
+                    mid_viejo = ordenes_activas[token_id]["midpoint"]
                     repostear = revisar_y_repostear(token_id, m["midpoint"])
                     if repostear:
                         ok, capital = puede_entrar(token_id)
                         if ok:
                             colocar_ordenes(m, capital)
+                            registrar_entrada(token_id, capital)
+                            delta = abs(m["midpoint"] - mid_viejo)
+                            notify_reposteo(question, mid_viejo, m["midpoint"], delta)
                             log_evento(
                                 tipo="reposteo",
                                 mercado=question,
-                                detalle=f"nuevo mid={m['midpoint']}"
+                                detalle=f"mid {mid_viejo} → {m['midpoint']} (Δ{delta:.4f})"
                             )
                             logging.info(f"[REPOSTEO] {question} @ {m['midpoint']}")
                     else:
@@ -76,6 +91,7 @@ def run():
                     if ok:
                         colocar_ordenes(m, capital)
                         registrar_entrada(token_id, capital)
+                        notify_entrada(question, capital, m["midpoint"], m["pool_diario"], m["num_makers"])
                         log_evento(
                             tipo="entrada",
                             mercado=question,
@@ -87,6 +103,7 @@ def run():
 
         except Exception as e:
             logging.error(f"Error en loop: {e}")
+            notify_error("loop principal", str(e))
 
         time.sleep(SCAN_INTERVAL)
 

@@ -1,31 +1,23 @@
-#!/usr/bin/env python3
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from modules.rewards_sim import simular_rewards_hora
-from config import REPORT_HOUR
-import asyncio
-from pathlib import Path
-import logging
+import os, json, logging, time, requests
 from datetime import datetime, date
-import json
-import schedule
-import time
+from pathlib import Path
 from dotenv import load_dotenv
-import requests
+import schedule
 
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+CHAT_ID        = os.getenv("CHAT_ID")
+LOG_PATH       = Path("data/daily_log.json")
+CAPITAL_PATH   = Path("data/capital_en_uso.json")
+ORDENES_PATH   = Path("data/ordenes_activas.json")
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 logger = logging.getLogger(__name__)
 
-LOG_PATH = Path("data/daily_log.json")
-
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+# ── Envío Telegram ──────────────────────────────────────────────
+def send_telegram(msg: str):
+    url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     try:
         requests.post(url, data=data, timeout=10).raise_for_status()
@@ -33,101 +25,109 @@ def send_telegram(msg):
     except Exception as e:
         logger.error(f"❌ Telegram error: {e}")
 
-def send_daily_report():
-    try:
-        with open(LOG_PATH, "r") as f:
-            data = json.load(f)
-    except:
-        logger.info("No daily_log encontrado")
-        return
-
-    hoy = str(date.today())
-    eventos_hoy = [e for e in data if e.get("fecha") == hoy]
-    
-    if not eventos_hoy:
-        logger.info("No eventos hoy")
-        return
-
-    # Estadísticas
-    total_reward = sum(e.get("reward", 0) for e in eventos_hoy)
-    entradas = len([e for e in eventos_hoy if e.get("tipo") == "entrada"])
-    sims = len([e for e in eventos_hoy if e.get("tipo") == "reward_sim"])
-
-    # Agrupar por mercado
-    by_market = {}
-    for e in eventos_hoy:
-        if e.get("tipo") == "reward_sim":
-            mercado = e.get("mercado", "Simulación")[:35]
-            r = e.get("reward", 0)
-            if mercado not in by_market:
-                by_market[mercado] = 0
-            by_market[mercado] += r
-
-    msg = f"""🚀 *POLYMARKET BOT - Daily {hoy}* 🚀
-
-💰 *TOTAL:* `{total_reward:.3f} USDC`
-
-📈 *POSICIONES:* {entradas} | *SIMS:* {sims}
-
-"""
-    
-    # Top mercados
-    for mercado, reward in sorted(by_market.items(), key=lambda x: x[1], reverse=True)[:6]:
-        msg += f"• `{mercado}` → *{reward:.3f}*\n"
-
-    # Next events
-    next_hour = (datetime.now().hour + 1) % 24
-    msg += f"\n⏰ *Next:* {next_hour:02d}:00 hourly | 23:00 daily"
-
+# ── Notificaciones instantáneas (llamadas desde main.py) ────────
+def notify_entrada(question: str, capital: float, mid: float, pool: float, num_makers: int):
+    msg = (
+        f"🟢 *ENTRADA*\n"
+        f"📌 `{question[:55]}`\n"
+        f"💵 Capital: `{capital:.2f} USDC`\n"
+        f"📊 Mid: `{mid}` | Pool: `${pool:.1f}/día`\n"
+        f"👥 Makers: `{num_makers}` | Score: `{pool/max(num_makers,1):.1f}`"
+    )
     send_telegram(msg)
 
-async def hourly_rewards_job():
+def notify_reposteo(question: str, mid_viejo: float, mid_nuevo: float, delta: float):
+    msg = (
+        f"🔄 *REPOSTEO*\n"
+        f"📌 `{question[:55]}`\n"
+        f"📉 Mid: `{mid_viejo}` → `{mid_nuevo}` (Δ`{delta:.4f}`)"
+    )
+    send_telegram(msg)
+
+def notify_salida(question: str, capital_liberado: float):
+    msg = (
+        f"🔴 *SALIDA* — mercado cerrado/desaparecido\n"
+        f"📌 `{question[:55]}`\n"
+        f"💵 Capital liberado: `{capital_liberado:.2f} USDC`"
+    )
+    send_telegram(msg)
+
+def notify_error(contexto: str, error: str):
+    msg = (
+        f"⚠️ *ERROR en el bot*\n"
+        f"📍 `{contexto}`\n"
+        f"❗ `{str(error)[:200]}`"
+    )
+    send_telegram(msg)
+
+# ── Reporte diario a las 23:00 ──────────────────────────────────
+def send_daily_report():
+    hoy = str(date.today())
+
     try:
-        reward = simular_rewards_hora()
-        logger.info(f"💵 Reward: {reward:+.3f} USDC")
+        with open(LOG_PATH) as f:
+            data = json.load(f)
+    except:
+        data = []
 
-        evento = {
-            "fecha": str(date.today()),
-            "hora": datetime.now().strftime("%H:%M"),
-            "tipo": "reward_sim",
-            "mercado": "Daily pool sim",
-            "detalle": f"simulado {reward:.4f} USDC",
-            "reward": float(reward)
-        }
+    eventos_hoy = [e for e in data if e.get("fecha") == hoy]
 
-        # Append to log
-        try:
-            with open(LOG_PATH, "r+") as f:
-                try:
-                    data = json.load(f)
-                except:
-                    data = []
-                data.append(evento)
-                f.seek(0)
-                f.truncate()
-                json.dump(data, f, indent=2)
-        except FileNotFoundError:
-            Path(LOG_PATH).parent.mkdir(exist_ok=True)
-            with open(LOG_PATH, "w") as f:
-                json.dump([evento], f, indent=2)
+    # Capital en uso ahora mismo
+    try:
+        with open(CAPITAL_PATH) as f:
+            capital_en_uso = json.load(f)
+        total_en_uso = sum(capital_en_uso.values())
+    except:
+        total_en_uso = 0.0
 
-    except Exception as e:
-        logger.error(f"Error hourly: {e}")
+    # Órdenes activas
+    try:
+        with open(ORDENES_PATH) as f:
+            ordenes = json.load(f)
+        n_ordenes = len(ordenes)
+    except:
+        n_ordenes = 0
 
+    entradas  = [e for e in eventos_hoy if e.get("tipo") == "entrada"]
+    salidas   = [e for e in eventos_hoy if e.get("tipo") == "salida"]
+    reposteos = [e for e in eventos_hoy if e.get("tipo") == "reposteo"]
+    rewards   = [e for e in eventos_hoy if e.get("tipo") == "reward_sim"]
+    total_reward = sum(e.get("reward", 0) for e in rewards)
+
+    # Desglose por mercado
+    by_market = {}
+    for e in rewards:
+        k = e.get("mercado", "?")[:40]
+        by_market[k] = by_market.get(k, 0) + e.get("reward", 0)
+
+    lineas_mercados = ""
+    for m, r in sorted(by_market.items(), key=lambda x: x[1], reverse=True)[:8]:
+        lineas_mercados += f"  • `{m}` → *{r:.4f} USDC*\n"
+
+    msg = (
+        f"📊 *REPORTE DIARIO — {hoy}*\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 *Rewards estimados:* `{total_reward:.4f} USDC`\n"
+        f"💼 *Capital en uso:* `{total_en_uso:.2f} USDC`\n"
+        f"📂 *Órdenes activas:* `{n_ordenes}`\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"✅ Entradas: `{len(entradas)}` | "
+        f"🔴 Salidas: `{len(salidas)}` | "
+        f"🔄 Reposteos: `{len(reposteos)}`\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"*Por mercado:*\n{lineas_mercados}"
+    )
+    send_telegram(msg)
+
+# ── Scheduler ───────────────────────────────────────────────────
 def main():
-    logger.info("🚀 Notifier PRO iniciado")
-    logger.info(f"Telegram: {'✅' if TELEGRAM_TOKEN and CHAT_ID else '❌ Config'}")
-
-    # Schedule
-    schedule.every().hour.at(":00").do(lambda: asyncio.run(hourly_rewards_job()))
-    schedule.every().day.at(REPORT_HOUR).do(send_daily_report)
-    
-    # Trigger inicial
-    asyncio.run(hourly_rewards_job())
-
+    logger.info("🚀 Notifier iniciado")
+    schedule.every().day.at("23:00").do(send_daily_report)
+    send_telegram("🤖 *Bot LIVE arrancado* — escuchando mercados...")
     while True:
         schedule.run_pending()
         time.sleep(60)
 
 if __name__ == "__main__":
     main()
+
