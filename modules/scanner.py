@@ -42,9 +42,9 @@ def get_rewarded_markets():
             if not tokens:
                 continue
 
-            token_id = tokens[0].get("token_id")
+            token_id  = tokens[0].get("token_id")
             yes_price = float(tokens[0].get("price", 0.5))
-            no_price = float(tokens[1].get("price", 0.5)) if len(tokens) > 1 else 0.5
+            no_price  = float(tokens[1].get("price", 0.5)) if len(tokens) > 1 else 0.5
             max_spread = float(cm.get("rewards", {}).get("max_spread", 4.5))
 
             if not token_id:
@@ -63,17 +63,15 @@ def get_rewarded_markets():
             if num_makers > MAX_MAKERS:
                 continue
 
-            if yes_price > 0 and yes_price != 0.5:
-                midpoint = round(yes_price, 4)
-            elif bids and asks:
+            if bids and asks:
                 best_bid = float(bids[0]["price"])
                 best_ask = float(asks[0]["price"])
                 if best_bid > 0.05 and best_ask < 0.95:
                     midpoint = round((best_bid + best_ask) / 2, 4)
                 else:
                     midpoint = round(yes_price, 4)
-                elif yez_price > o:
-                    midpoint = round(yes_price, 4)
+            elif yes_price > 0:
+                midpoint = round(yes_price, 4)
             else:
                 logging.info(f"[SKIP] Sin precio válido: {question[:40]}")
                 continue
@@ -82,16 +80,16 @@ def get_rewarded_markets():
 
             oportunidades.append({
                 "condition_id": condition_id,
-                "token_id": token_id,
-                "question": question,
-                "pool_diario": pool,
-                "min_size": min_size,
-                "max_spread": max_spread,
-                "num_makers": num_makers,
-                "score": score,
-                "midpoint": midpoint,
-                "yes_price": yes_price,
-                "no_price": no_price
+                "token_id":     token_id,
+                "question":     question,
+                "pool_diario":  pool,
+                "min_size":     min_size,
+                "max_spread":   max_spread,
+                "num_makers":   num_makers,
+                "score":        score,
+                "midpoint":     midpoint,
+                "yes_price":    yes_price,
+                "no_price":     no_price
             })
 
             logging.info(f"[✅] {question[:55]} | pool=${pool:.1f} | makers={num_makers} | mid={midpoint}")

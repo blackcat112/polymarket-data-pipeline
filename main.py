@@ -2,11 +2,9 @@ import time, json, logging, os
 from datetime import date
 from dotenv import load_dotenv
 from modules.scanner import get_rewarded_markets
-from modules.maker import colocar_ordenes, revisar_y_repostear, ordenes_activas
-from modules.risk import puede_entrar, registrar_entrada
-from config import SCAN_INTERVAL
-from modules.risk import puede_entrar, registrar_entrada, registrar_salida
 from modules.maker import colocar_ordenes, revisar_y_repostear, ordenes_activas, _guardar_ordenes
+from modules.risk import puede_entrar, registrar_entrada, registrar_salida
+from config import SCAN_INTERVAL
 
 load_dotenv()
 os.makedirs("logs", exist_ok=True)
@@ -44,23 +42,21 @@ def run():
             scan_count += 1
             mercados = get_rewarded_markets()
             logging.info(f"Scanner #{scan_count}: {len(mercados)} oportunidades")
-        
 
-        # Detectar mercados que ya no aparecen en el scan y liberar capital
-        token_ids_activos = {m["token_id"] for m in mercados}
-        for token_id in list(ordenes_activas.keys()):
-            if token_id not in token_ids_activos:
-                registrar_salida(token_id)
-                del ordenes_activas[token_id]
-                _guardar_ordenes(ordenes_activas)
-                logging.info(f"[SALIDA] Mercado {token_id[:20]} ya no está en scan — capital liberado")
-    
+            # Liberar capital de mercados que ya no están en el scan
+            token_ids_activos = {m["token_id"] for m in mercados}
+            for token_id in list(ordenes_activas.keys()):
+                if token_id not in token_ids_activos:
+                    registrar_salida(token_id)
+                    del ordenes_activas[token_id]
+                    _guardar_ordenes(ordenes_activas)
+                    logging.info(f"[SALIDA] Mercado {token_id[:20]} ya no está en scan — capital liberado")
+
             for m in mercados[:3]:
                 token_id = m["token_id"]
                 question = m["question"][:50]
 
                 if token_id in ordenes_activas:
-                    # Ya estamos dentro — revisar si hay que repostear
                     repostear = revisar_y_repostear(token_id, m["midpoint"])
                     if repostear:
                         ok, capital = puede_entrar(token_id)
@@ -75,7 +71,6 @@ def run():
                     else:
                         logging.info(f"[ACTIVO] {question} | mid={m['midpoint']} sin cambios")
                 else:
-                    # Mercado nuevo — entrar
                     ok, capital = puede_entrar(token_id)
                     if ok:
                         colocar_ordenes(m, capital)
