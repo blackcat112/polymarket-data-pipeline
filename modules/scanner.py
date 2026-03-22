@@ -1,14 +1,17 @@
-import logging
-import requests
+import logging, os, requests
+from dotenv import load_dotenv
 from config import MIN_DAILY_REWARD, MAX_MAKERS, CAPITAL_TOTAL, MAX_MIN_SIZE, RESERVA_PCT
 
-CLOB = "https://clob.polymarket.com"
+load_dotenv()
+
+CLOB  = "https://clob.polymarket.com"
+PROXY = {"http": os.getenv("PROXY_URL"), "https": os.getenv("PROXY_URL")}
 
 def get_rewarded_markets():
     oportunidades = []
 
     try:
-        r = requests.get(f"{CLOB}/rewards/markets/current", timeout=10)
+        r = requests.get(f"{CLOB}/rewards/markets/current", timeout=10, proxies=PROXY)
         data = r.json().get("data", [])
         logging.info(f"[SCANNER] {len(data)} mercados totales")
     except Exception as e:
@@ -26,28 +29,23 @@ def get_rewarded_markets():
             if pool < MIN_DAILY_REWARD:
                 continue
             if min_size > MAX_MIN_SIZE:
-                logging.info(f"[SKIP min_size] {condition_id[:20]} min={min_size} pool={pool}")
                 continue
-            if min_size > capital_operativo:
-                logging.info(f"[SKIP capital] {condition_id[:20]} min={min_size} cap={capital_operativo:.2f}")
-                continue
-    
 
-            cm = requests.get(f"{CLOB}/markets/{condition_id}", timeout=5).json()
+            cm = requests.get(f"{CLOB}/markets/{condition_id}", timeout=5, proxies=PROXY).json()
 
             if not cm.get("active") or cm.get("closed"):
                 continue
             if not cm.get("accepting_orders"):
                 continue
 
-            question = cm.get("question", condition_id[:30])
-            tokens = cm.get("tokens", [])
+            question   = cm.get("question", condition_id[:30])
+            tokens     = cm.get("tokens", [])
             if not tokens:
                 continue
 
-            token_id  = tokens[0].get("token_id")
-            yes_price = float(tokens[0].get("price", 0.5))
-            no_price  = float(tokens[1].get("price", 0.5)) if len(tokens) > 1 else 0.5
+            token_id   = tokens[0].get("token_id")
+            yes_price  = float(tokens[0].get("price", 0.5))
+            no_price   = float(tokens[1].get("price", 0.5)) if len(tokens) > 1 else 0.5
             max_spread = float(cm.get("rewards", {}).get("max_spread", 4.5))
 
             if not token_id:
@@ -56,11 +54,12 @@ def get_rewarded_markets():
             book = requests.get(
                 f"{CLOB}/book",
                 params={"token_id": token_id},
-                timeout=5
+                timeout=5,
+                proxies=PROXY
             ).json()
 
-            bids = book.get("bids", [])
-            asks = book.get("asks", [])
+            bids       = book.get("bids", [])
+            asks       = book.get("asks", [])
             num_makers = len(bids) + len(asks)
 
             if num_makers > MAX_MAKERS:
