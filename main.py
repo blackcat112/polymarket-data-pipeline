@@ -2,7 +2,7 @@ import time, json, logging, os
 from datetime import date
 from dotenv import load_dotenv
 from modules.scanner import get_rewarded_markets
-from modules.maker import colocar_ordenes, revisar_y_repostear, ordenes_activas, _guardar_ordenes
+from modules.maker import colocar_ordenes, revisar_y_repostear, ordenes_activas, _guardar_ordenes, cancelar_todas
 from modules.risk import puede_entrar, registrar_entrada, registrar_salida
 from config import SCAN_INTERVAL
 
@@ -34,7 +34,8 @@ def log_evento(tipo, mercado, detalle="", reward=0):
         json.dump(data, f, indent=2)
 
 def run():
-    logging.info("🚀 Bot iniciado en modo DRY-RUN")
+    cancelar_todas()
+    logging.info("🚀 Bot iniciado en modo LIVE")
     scan_count = 0
 
     while True:
