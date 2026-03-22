@@ -72,6 +72,8 @@ def get_rewarded_markets():
                     midpoint = round((best_bid + best_ask) / 2, 4)
                 else:
                     midpoint = round(yes_price, 4)
+                elif yez_price > o:
+                    midpoint = round(yes_price, 4)
             else:
                 logging.info(f"[SKIP] Sin precio válido: {question[:40]}")
                 continue
