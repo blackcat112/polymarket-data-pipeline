@@ -60,14 +60,13 @@ def colocar_ordenes(mercado: dict, capital_asignado: float):
             price=bid_price,
             size=size,
             side="BUY",
-            order_type=OrderType.GTC,
         ))
         ask_order = client.create_and_post_order(OrderArgs(
             token_id=token_id,
             price=ask_price,
             size=size,
             side="SELL",
-            order_type=OrderType.GTC,
+        
         ))
 
         bid_id = bid_order.get("orderID", "?")

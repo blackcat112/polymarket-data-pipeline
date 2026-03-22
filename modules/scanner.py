@@ -26,9 +26,12 @@ def get_rewarded_markets():
             if pool < MIN_DAILY_REWARD:
                 continue
             if min_size > MAX_MIN_SIZE:
+                logging.info(f"[SKIP min_size] {condition_id[:20]} min={min_size} pool={pool}")
                 continue
             if min_size > capital_operativo:
+                logging.info(f"[SKIP capital] {condition_id[:20]} min={min_size} cap={capital_operativo:.2f}")
                 continue
+    
 
             cm = requests.get(f"{CLOB}/markets/{condition_id}", timeout=5).json()
 

@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from modules.scanner import get_rewarded_markets
 from modules.maker import colocar_ordenes, revisar_y_repostear, ordenes_activas, _guardar_ordenes, cancelar_todas
 from modules.risk import puede_entrar, registrar_entrada, registrar_salida, _cargar, capital_disponible
-from modules.notifier import notify_entrada, notify_reposteo, notify_salida, notify_error
+from modules.notifier import notify_entrada, notify_reposteo, notify_salida, notify_error, send_daily_report
 from config import SCAN_INTERVAL
 
 load_dotenv()
@@ -35,9 +35,10 @@ def log_evento(tipo, mercado, detalle="", reward=0):
         json.dump(data, f, indent=2)
 
 def run():
-    cancelar_todas()
+    
     logging.info("🚀 Bot iniciado en modo LIVE")
     scan_count = 0
+    reporte_enviado_hoy = False
 
     while True:
         try:
@@ -100,6 +101,15 @@ def run():
                         logging.info(f"[ENTRADA] {question} | capital={capital:.2f} | mid={m['midpoint']}")
                     else:
                         logging.info(f"[SKIP] Sin capital para: {question}")
+
+            # Reporte diario a las 23:00 (una sola vez por día)
+            hora_actual = time.strftime("%H:%M")
+            if hora_actual == "23:00" and not reporte_enviado_hoy:
+                send_daily_report()
+                reporte_enviado_hoy = True
+                logging.info("[REPORTE] Daily report enviado")
+            elif hora_actual == "00:00":
+                reporte_enviado_hoy = False  # reset para el día siguiente
 
         except Exception as e:
             logging.error(f"Error en loop: {e}")
