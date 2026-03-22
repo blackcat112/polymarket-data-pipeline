@@ -2,7 +2,8 @@
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from rewards_sim import simular_rewards_hora
+from modules.rewards_sim import simular_rewards_hora
+from config import REPORT_HOUR
 import asyncio
 from pathlib import Path
 import logging
@@ -119,7 +120,7 @@ def main():
 
     # Schedule
     schedule.every().hour.at(":00").do(lambda: asyncio.run(hourly_rewards_job()))
-    schedule.every().day.at("23:23").do(send_daily_report)
+    schedule.every().day.at(REPORT_HOUR).do(send_daily_report)
     
     # Trigger inicial
     asyncio.run(hourly_rewards_job())

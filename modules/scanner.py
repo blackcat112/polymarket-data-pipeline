@@ -1,6 +1,6 @@
 import logging
 import requests
-from config import MIN_DAILY_REWARD, MAX_MAKERS, CAPITAL_TOTAL, MAX_MIN_SIZE
+from config import MIN_DAILY_REWARD, MAX_MAKERS, CAPITAL_TOTAL, MAX_MIN_SIZE, RESERVA_PCT
 
 CLOB = "https://clob.polymarket.com"
 
@@ -15,7 +15,7 @@ def get_rewarded_markets():
         logging.error(f"[SCANNER ERROR] {e}")
         return []
 
-    capital_operativo = CAPITAL_TOTAL * 0.80
+    capital_operativo = CAPITAL_TOTAL * (1 - RESERVA_PCT)
 
     for market in data:
         try:
@@ -37,20 +37,19 @@ def get_rewarded_markets():
             if not cm.get("accepting_orders"):
                 continue
 
-            question   = cm.get("question", condition_id[:30])
-            tokens     = cm.get("tokens", [])
+            question = cm.get("question", condition_id[:30])
+            tokens = cm.get("tokens", [])
             if not tokens:
                 continue
 
-            token_id   = tokens[0].get("token_id")
-            yes_price  = float(tokens[0].get("price", 0.5))
-            no_price   = float(tokens[1].get("price", 0.5)) if len(tokens) > 1 else 0.5
+            token_id = tokens[0].get("token_id")
+            yes_price = float(tokens[0].get("price", 0.5))
+            no_price = float(tokens[1].get("price", 0.5)) if len(tokens) > 1 else 0.5
             max_spread = float(cm.get("rewards", {}).get("max_spread", 4.5))
 
             if not token_id:
                 continue
 
-            # Order book
             book = requests.get(
                 f"{CLOB}/book",
                 params={"token_id": token_id},
@@ -64,8 +63,6 @@ def get_rewarded_markets():
             if num_makers > MAX_MAKERS:
                 continue
 
-            # Midpoint real: yes_price es la fuente más fiable
-            # El order book tiene órdenes placeholder en extremos (0.01/0.99)
             if yes_price > 0 and yes_price != 0.5:
                 midpoint = round(yes_price, 4)
             elif bids and asks:
@@ -83,16 +80,16 @@ def get_rewarded_markets():
 
             oportunidades.append({
                 "condition_id": condition_id,
-                "token_id":     token_id,
-                "question":     question,
-                "pool_diario":  pool,
-                "min_size":     min_size,
-                "max_spread":   max_spread,
-                "num_makers":   num_makers,
-                "score":        score,
-                "midpoint":     midpoint,
-                "yes_price":    yes_price,
-                "no_price":     no_price
+                "token_id": token_id,
+                "question": question,
+                "pool_diario": pool,
+                "min_size": min_size,
+                "max_spread": max_spread,
+                "num_makers": num_makers,
+                "score": score,
+                "midpoint": midpoint,
+                "yes_price": yes_price,
+                "no_price": no_price
             })
 
             logging.info(f"[✅] {question[:55]} | pool=${pool:.1f} | makers={num_makers} | mid={midpoint}")
