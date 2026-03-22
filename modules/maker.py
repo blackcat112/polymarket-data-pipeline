@@ -15,16 +15,20 @@ def get_client():
     global _client
     if _client is None:
         proxy_url = os.getenv("PROXY_URL")
+        if proxy_url:
+            os.environ["HTTP_PROXY"]  = proxy_url
+            os.environ["HTTPS_PROXY"] = proxy_url
+            logging.info(f"[MAKER] Proxy configurado: {proxy_url}")
+
         _client = ClobClient(
             host="https://clob.polymarket.com",
             key=os.getenv("PRIVATE_KEY"),
             chain_id=POLYGON,
             funder=os.getenv("POLYMARKET_PROXY"),
             signature_type=2,
-            proxy=proxy_url,
         )
         _client.set_api_creds(_client.create_or_derive_api_creds())
-        logging.info(f"[MAKER] Cliente CLOB inicializado con proxy={proxy_url}")
+        logging.info("[MAKER] Cliente CLOB inicializado")
     return _client
 
 def _cargar_ordenes():
