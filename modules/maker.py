@@ -1,128 +1,126 @@
-import os, json, logging
+import time, json, logging, os
+from datetime import date
 from dotenv import load_dotenv
-from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import OrderArgs, OrderType
-from py_clob_client.constants import POLYGON
-from config import ORDER_OFFSET, CANCEL_THRESHOLD
+from modules.scanner import get_rewarded_markets
+from modules.maker import colocar_ordenes, revisar_y_repostear, ordenes_activas, _guardar_ordenes, cancelar_todas
+from modules.risk import puede_entrar, registrar_entrada, registrar_salida, _cargar, capital_disponible
+from modules.notifier import notify_entrada, notify_reposteo, notify_salida, notify_error, send_daily_report
+from config import SCAN_INTERVAL
 
 load_dotenv()
+os.makedirs("logs", exist_ok=True)
+os.makedirs("data", exist_ok=True)
+logging.basicConfig(
+    filename="logs/bot.log",
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
 
-ORDENES_PATH = "data/ordenes_activas.json"
+def log_evento(tipo, mercado, detalle="", reward=0):
+    path = "data/daily_log.json"
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+    except:
+        data = []
+    data.append({
+        "fecha":   str(date.today()),
+        "hora":    time.strftime("%H:%M:%S"),
+        "tipo":    tipo,
+        "mercado": mercado,
+        "detalle": detalle,
+        "reward":  reward
+    })
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
 
-# --- Cliente Polymarket ---
-_client = None
+def run():
+    cancelar_todas()
+    logging.info("🚀 Bot iniciado en modo LIVE")
+    scan_count = 0
+    reporte_enviado_hoy = False
 
-def get_client():
-    global _client
-    if _client is None:
-        _client = ClobClient(
-            host="https://clob.polymarket.com",
-            key=os.getenv("PRIVATE_KEY"),
-            chain_id=POLYGON,
-            funder=os.getenv("POLYMARKET_PROXY"),
-            signature_type=2,   # POLY_PROXY
-        )
-        _client.set_api_creds(_client.create_or_derive_api_creds())
-        logging.info("[MAKER] Cliente CLOB inicializado")
-    return _client
-
-# --- Persistencia de órdenes ---
-def _cargar_ordenes():
-    if os.path.exists(ORDENES_PATH):
+    while True:
         try:
-            with open(ORDENES_PATH) as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
+            scan_count += 1
+            mercados = get_rewarded_markets()
+            logging.info(f"Scanner #{scan_count}: {len(mercados)} oportunidades")
 
-def _guardar_ordenes(ordenes):
-    with open(ORDENES_PATH, "w") as f:
-        json.dump(ordenes, f, indent=2)
+            token_ids_activos = {m["token_id"] for m in mercados}
+            capital_en_uso = _cargar()
 
-ordenes_activas = _cargar_ordenes()
+            for token_id in list(ordenes_activas.keys()):
+                if token_id not in token_ids_activos:
+                    nombre = ordenes_activas[token_id].get("question", token_id[:20])
+                    capital_lib = capital_en_uso.get(token_id, 0.0)
+                    registrar_salida(token_id)
+                    del ordenes_activas[token_id]
+                    _guardar_ordenes(ordenes_activas)
+                    notify_salida(nombre, capital_lib)
+                    log_evento(
+                        tipo="salida",
+                        mercado=nombre,
+                        detalle=f"capital liberado={capital_lib:.2f} USDC"
+                    )
+                    logging.info(f"[SALIDA] {nombre} — capital liberado: {capital_lib:.2f} USDC")
 
-# --- Colocar BID + ASK ---
-def colocar_ordenes(mercado: dict, capital_asignado: float):
-    mid      = mercado["midpoint"]
-    token_id = mercado["token_id"]
-    question = mercado["question"]
-    size     = round(capital_asignado / 2, 2)
+            for m in mercados[:3]:
+                token_id = m["token_id"]
+                question = m["question"][:50]
 
-    bid_price = round(mid - ORDER_OFFSET, 3)
-    ask_price = round(mid + ORDER_OFFSET, 3)
+                if token_id in ordenes_activas:
+                    mid_viejo = ordenes_activas[token_id]["midpoint"]
+                    repostear = revisar_y_repostear(token_id, m["midpoint"])
+                    if repostear:
+                        ok, capital = puede_entrar(token_id)
+                        if ok:
+                            ejecutado = colocar_ordenes(m, capital)
+                            if ejecutado:
+                                registrar_entrada(token_id, capital)
+                                delta = abs(m["midpoint"] - mid_viejo)
+                                notify_reposteo(question, mid_viejo, m["midpoint"], delta)
+                                log_evento(
+                                    tipo="reposteo",
+                                    mercado=question,
+                                    detalle=f"mid {mid_viejo} → {m['midpoint']} (Δ{delta:.4f})"
+                                )
+                                logging.info(f"[REPOSTEO] {question} @ {m['midpoint']}")
+                            else:
+                                logging.info(f"[REPOSTEO FALLIDO] {question}")
+                    else:
+                        logging.info(f"[ACTIVO] {question} | mid={m['midpoint']} sin cambios")
+                else:
+                    ok, capital = puede_entrar(token_id)
+                    if ok:
+                        ejecutado = colocar_ordenes(m, capital)
+                        if ejecutado:
+                            registrar_entrada(token_id, capital)
+                            notify_entrada(question, capital, m["midpoint"], m["pool_diario"], m["num_makers"])
+                            log_evento(
+                                tipo="entrada",
+                                mercado=question,
+                                detalle=f"capital={capital:.2f} USDC | mid={m['midpoint']} | pool=${m['pool_diario']}/día"
+                            )
+                            logging.info(f"[ENTRADA] {question} | capital={capital:.2f} | mid={m['midpoint']}")
+                        else:
+                            logging.info(f"[ORDEN FALLIDA] {question} — no se registra entrada")
+                    else:
+                        logging.info(f"[SKIP] Sin capital para: {question}")
 
-    try:
-        client = get_client()
+            hora_actual = time.strftime("%H:%M")
+            if hora_actual == "23:00" and not reporte_enviado_hoy:
+                send_daily_report()
+                reporte_enviado_hoy = True
+                logging.info("[REPORTE] Daily report enviado")
+            elif hora_actual == "00:00":
+                reporte_enviado_hoy = False
 
-        bid_order = client.create_and_post_order(OrderArgs(
-            token_id=token_id,
-            price=bid_price,
-            size=size,
-            side="BUY",
-        ))
-             logging.info(f"[DEBUG BID] type={type(bid_order)} val={bid_order}")
-        ask_order = client.create_and_post_order(OrderArgs(
-            token_id=token_id,
-            price=ask_price,
-            size=size,
-            side="SELL",
-        
-        ))
+        except Exception as e:
+            logging.error(f"Error en loop: {e}")
+            notify_error("loop principal", str(e))
 
-         logging.info(f"[DEBUG ASK] type={type(ask_order)} val={ask_order}")
+        time.sleep(SCAN_INTERVAL)
 
-        bid_id = bid_order.get("orderID", "?")
-        ask_id = ask_order.get("orderID", "?")
-
-        logging.info(f"[LIVE] BID {size}@{bid_price} id={bid_id} | ASK {size}@{ask_price} id={ask_id}")
-
-        ordenes_activas[token_id] = {
-            "bid_id":   bid_id,
-            "ask_id":   ask_id,
-            "midpoint": mid,
-            "question": question[:60]
-        }
-        _guardar_ordenes(ordenes_activas)
-
-    except Exception as e:
-        logging.error(f"[MAKER] Error colocando órdenes en {question[:40]}: {e}")
-
-# --- Cancelar órdenes existentes ---
-def _cancelar_ordenes_token(token_id: str):
-    orden = ordenes_activas.get(token_id)
-    if not orden:
-        return
-    try:
-        client = get_client()
-        for oid in [orden.get("bid_id"), orden.get("ask_id")]:
-            if oid and oid not in ("?",):
-                client.cancel(order_id=oid)
-                logging.info(f"[MAKER] Orden cancelada: {oid}")
-    except Exception as e:
-        logging.warning(f"[MAKER] Error cancelando órdenes: {e}")
-
-# --- Revisar y repostear si el precio se movió ---
-def revisar_y_repostear(token_id: str, nuevo_mid: float):
-    orden = ordenes_activas.get(token_id)
-    if not orden:
-        return False
-
-    delta = abs(nuevo_mid - orden["midpoint"])
-    if delta > CANCEL_THRESHOLD:
-        logging.info(f"[MAKER] Precio movido {delta:.4f} — cancela y reposta @ {nuevo_mid}")
-        _cancelar_ordenes_token(token_id)
-        del ordenes_activas[token_id]
-        _guardar_ordenes(ordenes_activas)
-        return True
-
-    return False
-
-# --- Cancelar todo (útil al arrancar en limpio) ---
-def cancelar_todas():
-    for token_id in list(ordenes_activas.keys()):
-        _cancelar_ordenes_token(token_id)
-    ordenes_activas.clear()
-    _guardar_ordenes(ordenes_activas)
-    logging.info("[MAKER] Todas las órdenes canceladas")
+if __name__ == "__main__":
+    run()
 

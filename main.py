@@ -35,7 +35,7 @@ def log_evento(tipo, mercado, detalle="", reward=0):
         json.dump(data, f, indent=2)
 
 def run():
-    
+    cancelar_todas()
     logging.info("🚀 Bot iniciado en modo LIVE")
     scan_count = 0
     reporte_enviado_hoy = False
@@ -46,7 +46,6 @@ def run():
             mercados = get_rewarded_markets()
             logging.info(f"Scanner #{scan_count}: {len(mercados)} oportunidades")
 
-            # Liberar capital de mercados que ya no están en el scan
             token_ids_activos = {m["token_id"] for m in mercados}
             capital_en_uso = _cargar()
 
@@ -75,41 +74,46 @@ def run():
                     if repostear:
                         ok, capital = puede_entrar(token_id)
                         if ok:
-                            colocar_ordenes(m, capital)
-                            registrar_entrada(token_id, capital)
-                            delta = abs(m["midpoint"] - mid_viejo)
-                            notify_reposteo(question, mid_viejo, m["midpoint"], delta)
-                            log_evento(
-                                tipo="reposteo",
-                                mercado=question,
-                                detalle=f"mid {mid_viejo} → {m['midpoint']} (Δ{delta:.4f})"
-                            )
-                            logging.info(f"[REPOSTEO] {question} @ {m['midpoint']}")
+                            ejecutado = colocar_ordenes(m, capital)
+                            if ejecutado:
+                                registrar_entrada(token_id, capital)
+                                delta = abs(m["midpoint"] - mid_viejo)
+                                notify_reposteo(question, mid_viejo, m["midpoint"], delta)
+                                log_evento(
+                                    tipo="reposteo",
+                                    mercado=question,
+                                    detalle=f"mid {mid_viejo} → {m['midpoint']} (Δ{delta:.4f})"
+                                )
+                                logging.info(f"[REPOSTEO] {question} @ {m['midpoint']}")
+                            else:
+                                logging.info(f"[REPOSTEO FALLIDO] {question}")
                     else:
                         logging.info(f"[ACTIVO] {question} | mid={m['midpoint']} sin cambios")
                 else:
                     ok, capital = puede_entrar(token_id)
                     if ok:
-                        colocar_ordenes(m, capital)
-                        registrar_entrada(token_id, capital)
-                        notify_entrada(question, capital, m["midpoint"], m["pool_diario"], m["num_makers"])
-                        log_evento(
-                            tipo="entrada",
-                            mercado=question,
-                            detalle=f"capital={capital:.2f} USDC | mid={m['midpoint']} | pool=${m['pool_diario']}/día"
-                        )
-                        logging.info(f"[ENTRADA] {question} | capital={capital:.2f} | mid={m['midpoint']}")
+                        ejecutado = colocar_ordenes(m, capital)
+                        if ejecutado:
+                            registrar_entrada(token_id, capital)
+                            notify_entrada(question, capital, m["midpoint"], m["pool_diario"], m["num_makers"])
+                            log_evento(
+                                tipo="entrada",
+                                mercado=question,
+                                detalle=f"capital={capital:.2f} USDC | mid={m['midpoint']} | pool=${m['pool_diario']}/día"
+                            )
+                            logging.info(f"[ENTRADA] {question} | capital={capital:.2f} | mid={m['midpoint']}")
+                        else:
+                            logging.info(f"[ORDEN FALLIDA] {question} — no se registra entrada")
                     else:
                         logging.info(f"[SKIP] Sin capital para: {question}")
 
-            # Reporte diario a las 23:00 (una sola vez por día)
             hora_actual = time.strftime("%H:%M")
             if hora_actual == "23:00" and not reporte_enviado_hoy:
                 send_daily_report()
                 reporte_enviado_hoy = True
                 logging.info("[REPORTE] Daily report enviado")
             elif hora_actual == "00:00":
-                reporte_enviado_hoy = False  # reset para el día siguiente
+                reporte_enviado_hoy = False
 
         except Exception as e:
             logging.error(f"Error en loop: {e}")
