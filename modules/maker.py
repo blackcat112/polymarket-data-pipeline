@@ -61,6 +61,7 @@ def colocar_ordenes(mercado: dict, capital_asignado: float):
             size=size,
             side="BUY",
         ))
+             logging.info(f"[DEBUG BID] type={type(bid_order)} val={bid_order}")
         ask_order = client.create_and_post_order(OrderArgs(
             token_id=token_id,
             price=ask_price,
@@ -68,6 +69,8 @@ def colocar_ordenes(mercado: dict, capital_asignado: float):
             side="SELL",
         
         ))
+
+         logging.info(f"[DEBUG ASK] type={type(ask_order)} val={ask_order}")
 
         bid_id = bid_order.get("orderID", "?")
         ask_id = ask_order.get("orderID", "?")
