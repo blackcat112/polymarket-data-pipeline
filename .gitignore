@@ -1,5 +1,50 @@
-.env
-logs/
-data/
-venv/
+# Python
 __pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+*.env
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Spark
+spark-warehouse/
+derby.log
+metastore_db/
+
+# Airflow
+airflow/logs/
+airflow/plugins/__pycache__/
+
+# Data files
+*.parquet
+*.csv
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
