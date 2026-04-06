@@ -4,10 +4,7 @@ from datetime import datetime
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
-from pyspark.sql.types import (
-    StructType, StructField,
-    StringType, DoubleType, BooleanType, TimestampType
-)
+from pyspark.sql.types import DoubleType
 
 
 ANOMALY_THRESHOLD = 2.0
@@ -77,7 +74,6 @@ def extract_fields(df: DataFrame) -> DataFrame:
 def compute_volatility(df: DataFrame) -> DataFrame:
     """
     Rolling standard deviation of yes-price per market over the last 24 records.
-    This approximates price volatility without needing a time-series library.
     """
     window = (
         Window

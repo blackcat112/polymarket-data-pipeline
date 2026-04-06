@@ -45,15 +45,16 @@ def sample_df(spark: SparkSession):
 
 def test_compute_zscore_flags_outlier(sample_df) -> None:
     result = compute_zscore(sample_df)
-    anomalies = result.filter(result.is_anomaly == True).collect()
-    # The 9999.0 volume row for mkt1 should be flagged
+    anomalies = result.filter(result.is_anomaly).collect()
     assert any(row.volume_24h == 9999.0 for row in anomalies)
 
 
 def test_compute_zscore_no_anomaly_for_stable_market(sample_df) -> None:
     result = compute_zscore(sample_df)
     mkt2_anomalies = (
-        result.filter((result.market_id == "mkt2") & (result.is_anomaly == True))
+        result.filter(
+            (result.market_id == "mkt2") & result.is_anomaly
+        )
         .collect()
     )
     assert len(mkt2_anomalies) == 0
