@@ -13,32 +13,32 @@ Originally a trading bot, refactored into a production-grade pipeline demonstrat
 │                     POLYMARKET DATA PIPELINE                        │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  ┌─────────────┐    ┌──────────────┐    ┌────────────────────────┐ │
-│  │  INGESTION  │    │  PROCESSING  │    │    ORCHESTRATION       │ │
-│  │  (Bronze)   │───▶│   (Silver)   │───▶│    Airflow DAG         │ │
-│  │             │    │              │    │                        │ │
-│  │ Polymarket  │    │  PySpark job │    │  1. Extract            │ │
-│  │ CLOB API    │    │              │    │  2. Transform          │ │
-│  │             │    │  volatility  │    │  3. Load metrics       │ │
-│  │ httpx async │    │  vol avg     │    │                        │ │
-│  │ + tenacity  │    │  z-score     │    │  runs every hour       │ │
-│  └──────┬──────┘    └──────┬───────┘    └────────────┬───────────┘ │
-│         │                 │                          │             │
-│         ▼                 ▼                          ▼             │
-│  ┌────────────────────────────────────────────────────────────┐    │
-│  │                      PostgreSQL                            │    │
-│  │   raw_markets  |  silver_markets  |  metrics_aggregated    │    │
-│  └────────────────────────────────────┬───────────────────────┘    │
-│                                       │                            │
-│                                       ▼                            │
-│                            ┌──────────────────┐                    │
-│                            │    STREAMLIT     │                    │
-│                            │    DASHBOARD     │                    │
-│                            │                  │                    │
-│                            │  active markets  │                    │
-│                            │  price trends    │                    │
-│                            │  anomaly alerts  │                    │
-│                            └──────────────────┘                    │
+│  ┌─────────────┐    ┌──────────────┐    ┌────────────────────────┐  │
+│  │  INGESTION  │    │  PROCESSING  │    │    ORCHESTRATION       │  │
+│  │  (Bronze)   │───▶│   (Silver)   │───▶│    Airflow DAG         │  │
+│  │             │    │              │    │                        │  │
+│  │ Polymarket  │    │  PySpark job │    │  1. Extract            │  │
+│  │ CLOB API    │    │              │    │  2. Transform          │  │
+│  │             │    │  volatility  │    │  3. Load metrics       │  │
+│  │ httpx async │    │  vol avg     │    │                        │  │
+│  │ + tenacity  │    │  z-score     │    │  runs every hour       │  │
+│  └──────┬──────┘    └──────┬───────┘    └────────────┬───────────┘  │
+│         │                  │                         │              │
+│         ▼                  ▼                         ▼              │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │                      PostgreSQL                            │     │
+│  │   raw_markets  |  silver_markets  |  metrics_aggregated    │     │
+│  └────────────────────────────────────┬───────────────────────┘     │
+│                                       │                             │
+│                                       ▼                             │
+│                            ┌──────────────────┐                     │
+│                            │    STREAMLIT     │                     │
+│                            │    DASHBOARD     │                     │
+│                            │                  │                     │
+│                            │  active markets  │                     │
+│                            │  price trends    │                     │
+│                            │  anomaly alerts  │                     │
+│                            └──────────────────┘                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
