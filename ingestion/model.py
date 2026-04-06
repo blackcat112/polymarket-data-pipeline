@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -19,7 +19,7 @@ class Market:
     volume_24h: float
     active: bool
     end_date: Optional[datetime]
-    fetched_at: datetime = field(default_factory=datetime.now(datetime.timezone.utc))
+    fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -27,4 +27,4 @@ class RawMarketRecord:
     market_id: str
     question: str
     raw_json: str
-    fetched_at: datetime = field(default_factory=datetime.utcnow)
+    fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
