@@ -2,11 +2,7 @@
 
 An end-to-end Data Engineering pipeline that collects, processes, and visualises data from [Polymarket](https://polymarket.com), the largest on-chain prediction market platform.
 
-Polymarket hosts binary-outcome markets where traders buy and sell shares in real-world events — elections, sports results, economic indicators, geopolitical events. Each market has a live order book with bid/ask spreads, real-time pricing driven by crowd belief, and publicly accessible trading data via REST API.
-
 This project originated as a live market-making bot that placed limit orders on both sides of the spread to earn liquidity rewards. It has been refactored into a production-grade data pipeline that captures the full market data lifecycle: async ingestion from the CLOB API, batch transformation with Apache Spark, hourly orchestration via Apache Airflow, and a Streamlit dashboard for analytical monitoring.
-
-The pipeline demonstrates the complete data engineering stack — from raw API extraction to aggregated, query-optimised metrics — using the tooling found in modern data teams.
 
 ---
 
@@ -17,22 +13,22 @@ The pipeline demonstrates the complete data engineering stack — from raw API e
 |                      POLYMARKET DATA PIPELINE                       |
 +---------------------------------------------------------------------+
 |                                                                     |
-|  +---------------+    +--------------+    +---------------------+  |
-|  |   INGESTION   |    |  PROCESSING  |    |   ORCHESTRATION     |  |
-|  |   (Bronze)    +----> (Silver)     +---->   Airflow DAG       |  |
-|  |               |    |              |    |                     |  |
-|  | Polymarket    |    | PySpark job  |    | Task 1: extract     |  |
-|  | CLOB API      |    |              |    | Task 2: transform   |  |
-|  |               |    | - volatility |    | Task 3: load metrics|  |
-|  | httpx async   |    | - volume avg |    |                     |  |
-|  | + tenacity    |    | - z-score    |    | schedule: @hourly   |  |
-|  +-------+-------+    +------+-------+    +-----------+---------+  |
+|  +---------------+    +--------------+    +---------------------+   |
+|  |   INGESTION   |    |  PROCESSING  |    |   ORCHESTRATION     |   |
+|  |   (Bronze)    +----> (Silver)     +---->   Airflow DAG       |   |
+|  |               |    |              |    |                     |   |
+|  | Polymarket    |    | PySpark job  |    | Task 1: extract     |   |
+|  | CLOB API      |    |              |    | Task 2: transform   |   |
+|  |               |    | - volatility |    | Task 3: load metrics|   |
+|  | httpx async   |    | - volume avg |    |                     |   |
+|  | + tenacity    |    | - z-score    |    | schedule: @hourly   |   |
+|  +-------+-------+    +------+-------+    +-----------+---------+   |
 |          |                   |                        |             |
 |          v                   v                        v             |
-|  +-------------------------------------------------------------------+
-|  |                        PostgreSQL                                 |
-|  |   raw_markets  |  silver_markets  |  metrics_aggregated           |
-|  +-----------------------------------+-------------------------------+
+|  +------------------------------------------------------------------+
+|  |                        PostgreSQL                                |
+|  |   raw_markets  |  silver_markets  |  metrics_aggregated          |
+|  +-----------------------------------+------------------------------+
 |                                      |                              |
 |                                      v                              |
 |                           +--------------------+                    |
