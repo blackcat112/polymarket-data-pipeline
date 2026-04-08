@@ -1,78 +1,127 @@
 # Polymarket Data Pipeline
 
-An end-to-end Data Engineering pipeline that ingests prediction market data from the [Polymarket CLOB API](https://docs.polymarket.com), processes it with Apache Spark, orchestrates workflows with Apache Airflow, and exposes analytical metrics through a Streamlit dashboard.
+An end-to-end Data Engineering pipeline that collects, processes, and visualises data from [Polymarket](https://polymarket.com), the largest on-chain prediction market platform.
 
-Originally a trading bot, refactored into a production-grade pipeline demonstrating the full data lifecycle: async ingestion, batch transformation, scheduled orchestration, and real-time visualization — containerised with Docker Compose.
+Polymarket hosts binary-outcome markets where traders buy and sell shares in real-world events — elections, sports results, economic indicators, geopolitical events. Each market has a live order book with bid/ask spreads, real-time pricing driven by crowd belief, and publicly accessible trading data via REST API.
+
+This project originated as a live market-making bot that placed limit orders on both sides of the spread to earn liquidity rewards. It has been refactored into a production-grade data pipeline that captures the full market data lifecycle: async ingestion from the CLOB API, batch transformation with Apache Spark, hourly orchestration via Apache Airflow, and a Streamlit dashboard for analytical monitoring.
+
+The pipeline demonstrates the complete data engineering stack — from raw API extraction to aggregated, query-optimised metrics — using the tooling found in modern data teams.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     POLYMARKET DATA PIPELINE                        │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌─────────────┐    ┌──────────────┐    ┌────────────────────────┐  │
-│  │  INGESTION  │    │  PROCESSING  │    │    ORCHESTRATION       │  │
-│  │  (Bronze)   │───▶│   (Silver)   │───▶│    Airflow DAG         │  │
-│  │             │    │              │    │                        │  │
-│  │ Polymarket  │    │  PySpark job │    │  1. Extract            │  │
-│  │ CLOB API    │    │              │    │  2. Transform          │  │
-│  │             │    │  volatility  │    │  3. Load metrics       │  │
-│  │ httpx async │    │  vol avg     │    │                        │  │
-│  │ + tenacity  │    │  z-score     │    │  runs every hour       │  │
-│  └──────┬──────┘    └──────┬───────┘    └────────────┬───────────┘  │
-│         │                  │                         │              │
-│         ▼                  ▼                         ▼              │
-│  ┌────────────────────────────────────────────────────────────┐     │
-│  │                      PostgreSQL                            │     │
-│  │   raw_markets  |  silver_markets  |  metrics_aggregated    │     │
-│  └────────────────────────────────────┬───────────────────────┘     │
-│                                       │                             │
-│                                       ▼                             │
-│                            ┌──────────────────┐                     │
-│                            │    STREAMLIT     │                     │
-│                            │    DASHBOARD     │                     │
-│                            │                  │                     │
-│                            │  active markets  │                     │
-│                            │  price trends    │                     │
-│                            │  anomaly alerts  │                     │
-│                            └──────────────────┘                     │
-└─────────────────────────────────────────────────────────────────────┘
++---------------------------------------------------------------------+
+|                      POLYMARKET DATA PIPELINE                       |
++---------------------------------------------------------------------+
+|                                                                     |
+|  +---------------+    +--------------+    +---------------------+  |
+|  |   INGESTION   |    |  PROCESSING  |    |   ORCHESTRATION     |  |
+|  |   (Bronze)    +----> (Silver)     +---->   Airflow DAG       |  |
+|  |               |    |              |    |                     |  |
+|  | Polymarket    |    | PySpark job  |    | Task 1: extract     |  |
+|  | CLOB API      |    |              |    | Task 2: transform   |  |
+|  |               |    | - volatility |    | Task 3: load metrics|  |
+|  | httpx async   |    | - volume avg |    |                     |  |
+|  | + tenacity    |    | - z-score    |    | schedule: @hourly   |  |
+|  +-------+-------+    +------+-------+    +-----------+---------+  |
+|          |                   |                        |             |
+|          v                   v                        v             |
+|  +-------------------------------------------------------------------+
+|  |                        PostgreSQL                                 |
+|  |   raw_markets  |  silver_markets  |  metrics_aggregated           |
+|  +-----------------------------------+-------------------------------+
+|                                      |                              |
+|                                      v                              |
+|                           +--------------------+                    |
+|                           |     STREAMLIT      |                    |
+|                           |     DASHBOARD      |                    |
+|                           |                    |                    |
+|                           | - active markets   |                    |
+|                           | - price evolution  |                    |
+|                           | - anomaly alerts   |                    |
+|                           +--------------------+                    |
++---------------------------------------------------------------------+
 ```
 
----
-
-## Techniques
-
-- **[Async/await with asyncio](https://docs.python.org/3/library/asyncio.html)** — The ingestion layer uses `asyncio` with `httpx.AsyncClient` to fetch market data concurrently without blocking I/O. Multiple market endpoints are queried in parallel using `asyncio.gather`.
-
-- **Exponential backoff with [tenacity](https://tenacity.readthedocs.io/en/latest/)** — All outbound API calls are wrapped with `@retry` decorators that implement exponential backoff with jitter, handling transient network failures and rate-limit responses transparently.
-
-- **Medallion architecture** — Data flows through three explicit quality tiers in PostgreSQL: `raw_markets` (bronze, append-only source records), `silver_markets` (cleaned and enriched), and `metrics_aggregated` (gold, query-optimised for the dashboard).
-
-- **Z-score anomaly detection** — The Spark job flags statistical outliers in price and volume series using z-score normalisation computed over rolling windows via PySpark's `Window` functions.
-
-- **[Structured logging](https://www.structlog.org/en/stable/)** — All modules use `structlog` for JSON-formatted log output, making logs machine-parseable and compatible with log aggregation tools out of the box.
-
-- **[Type hints throughout](https://docs.python.org/3/library/typing.html)** — Every function signature uses Python 3.11 type annotations. `mypy` enforces strict typing across all modules.
+Data flows through three explicit quality tiers — bronze, silver, gold — following the medallion architecture pattern used in production data platforms.
 
 ---
 
-## Libraries
+## What Polymarket Is
 
-| Library | Purpose |
-|---|---|
-| [httpx](https://www.python-httpx.org/) | Async HTTP client with HTTP/2 support, replaces `aiohttp` with a cleaner API |
-| [tenacity](https://tenacity.readthedocs.io/) | Retry logic with exponential backoff, jitter, and per-exception strategies |
-| [PySpark 3.5](https://spark.apache.org/docs/latest/api/python/) | Distributed batch processing; used here with the DataFrame API and Window functions |
-| [Apache Airflow 2.9](https://airflow.apache.org/docs/) | Workflow orchestration with the TaskFlow API and hourly DAG scheduling |
-| [SQLAlchemy 2.0](https://docs.sqlalchemy.org/en/20/) | Async ORM for PostgreSQL interactions in the ingestion layer |
-| [Pydantic v2](https://docs.pydantic.dev/latest/) | Runtime validation of API response payloads with typed models |
-| [structlog](https://www.structlog.org/) | Structured, context-aware logging with JSON output |
-| [Streamlit](https://docs.streamlit.io/) | Dashboard framework with direct PostgreSQL connectivity |
-| [pytest-asyncio](https://pytest-asyncio.readthedocs.io/) | Async test support for `asyncio`-based ingestion tests |
+Polymarket is a prediction market built on the Polygon blockchain. Participants trade shares in binary outcomes: a share pays $1.00 if the event resolves YES and $0.00 if it resolves NO. The current market price (between $0.01 and $0.99) represents the crowd's implied probability of the outcome occurring.
+
+The platform exposes a Central Limit Order Book (CLOB) API that provides:
+
+- Live bid/ask order books for each market token
+- Historical price and volume data
+- Market metadata: question text, resolution date, category, liquidity pool size
+- Real-time maker/taker fee rates and reward eligibility
+
+This makes Polymarket data well-suited for time-series analysis, anomaly detection, and liquidity pattern studies — the analytical workloads this pipeline is built to support.
+
+---
+
+## Pipeline Layers
+
+### Layer 1 — Ingestion (Bronze)
+
+The ingestion module polls the Polymarket CLOB API every hour, collecting active market data including prices, volumes, order book depth, and reward pool metrics. All API calls are made asynchronously using `httpx.AsyncClient` with `asyncio.gather` for concurrent requests.
+
+Transient failures and rate-limit responses are handled transparently by `tenacity` retry decorators with exponential backoff and jitter. Every response is validated against Pydantic models before persistence.
+
+Raw API payloads are written as-is to the `raw_markets` table in PostgreSQL (the bronze layer), preserving the original structure for reprocessing. Duplicate records are handled via `ON CONFLICT DO NOTHING` on `(market_id, fetched_at)`.
+
+### Layer 2 — Processing (Silver)
+
+A PySpark batch job reads from `raw_markets`, applies analytical transformations, and writes enriched records to `silver_markets`.
+
+Transformations computed per market:
+
+- **Price volatility** — rolling standard deviation of the mid-price over a configurable time window, using PySpark `Window` functions
+- **Volume-weighted average price** — mean price weighted by trade size for each market token
+- **Z-score anomaly flag** — standardised price deviation from the rolling mean; records with `|z| > 2` are flagged as statistical outliers
+
+The Spark job is submitted via `spark-submit` from the Airflow DAG, connecting to PostgreSQL through the JDBC driver.
+
+### Layer 3 — Orchestration
+
+An Airflow DAG (`polymarket_pipeline`) runs on an hourly schedule and chains three tasks:
+
+1. `extract` — calls the ingestion module, persists raw records, returns a summary via XCom
+2. `transform` — submits the Spark job via `BashOperator` with `spark-submit`
+3. `load_metrics` — aggregates `silver_markets` into `metrics_aggregated` using an upsert, making the latest state immediately available to the dashboard
+
+The DAG uses Airflow's TaskFlow API (`@task` decorators) throughout, producing clean and testable Python rather than operator boilerplate. Retries are configured with exponential backoff at the DAG level.
+
+### Layer 4 — Dashboard
+
+A Streamlit application queries `metrics_aggregated` every 60 seconds and displays:
+
+- Most active markets by 24-hour volume
+- Price evolution time series per market
+- Anomaly alerts for markets with statistically significant price deviations
+
+---
+
+## Tech Stack
+
+| Layer          | Technology                   |
+|----------------|------------------------------|
+| Language       | Python 3.11                  |
+| Ingestion      | httpx, asyncio, tenacity     |
+| Validation     | Pydantic v2                  |
+| Processing     | Apache Spark 3.5 (PySpark)   |
+| Orchestration  | Apache Airflow 2.9           |
+| Storage        | PostgreSQL 16                |
+| Dashboard      | Streamlit 1.35               |
+| Infrastructure | Docker Compose v2            |
+| Logging        | structlog (JSON output)      |
+| Testing        | pytest, pytest-asyncio       |
+| Code quality   | ruff, mypy                   |
 
 ---
 
@@ -80,59 +129,34 @@ Originally a trading bot, refactored into a production-grade pipeline demonstrat
 
 ```
 polymarket-data-pipeline/
-├── .github/
-│   └── workflows/
 ├── airflow/
 │   ├── dags/
+│   │   └── polymarket_pipeline.py   # Hourly DAG: extract -> transform -> load
 │   └── plugins/
 │       └── operators/
 ├── ingestion/
+│   ├── polymarket_client.py         # Async API client with retry logic
+│   ├── model.py                     # Dataclasses for Market and RawMarketRecord
+│   ├── db.py                        # PostgreSQL persistence (bronze layer)
 │   └── tests/
 ├── spark/
 │   ├── jobs/
+│   │   └── transform_markets.py     # PySpark job: volatility, volume, z-score
 │   └── tests/
 ├── database/
 │   ├── migrations/
+│   │   └── 001_init.sql             # Three-layer schema definition
 │   └── queries/
 ├── dashboard/
+│   ├── app.py                       # Streamlit entry point
 │   └── components/
-├── infra/
-├── tests/
-│   └── integration/
+├── modules/                         # Original trading bot (kept for reference)
 ├── docs/
 ├── .env.example
 ├── pyproject.toml
 ├── CHANGELOG.md
 └── README.md
 ```
-
-**[`ingestion/`](./ingestion/)** — Async Polymarket API client. Handles rate limiting, retries, and raw data persistence to PostgreSQL. Entry point for the bronze layer.
-
-**[`spark/jobs/`](./spark/jobs/)** — PySpark transformation job. Reads from `raw_markets`, computes volatility (rolling std dev of odds), mean volume per market, and z-score anomaly flags. Writes to `silver_markets`.
-
-**[`airflow/dags/`](./airflow/dags/)** — Single DAG running every hour with three chained tasks: API extraction, Spark job submission, and metrics aggregation into PostgreSQL.
-
-**[`database/migrations/`](./database/migrations/)** — Plain SQL migration files defining the three-layer schema. Applied in order on first container startup.
-
-**[`dashboard/`](./dashboard/)** — Streamlit app querying `metrics_aggregated` every 60 seconds. Displays active markets, price evolution charts, and anomaly alerts.
-
-**[`infra/`](./infra/)** — Docker Compose file and per-service Dockerfiles. Defines `postgres`, `airflow-webserver`, `airflow-scheduler`, `spark-master`, `spark-worker`, and `streamlit` services.
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Language | Python 3.11 |
-| Ingestion | httpx, asyncio, tenacity |
-| Processing | Apache Spark 3.5 (PySpark) |
-| Orchestration | Apache Airflow 2.9 |
-| Storage | PostgreSQL 16 |
-| Dashboard | Streamlit 1.35 |
-| Infrastructure | Docker Compose v2 |
-| Testing | pytest, pytest-asyncio, pytest-cov |
-| Code quality | ruff, mypy |
 
 ---
 
@@ -145,11 +169,13 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Services once running:
+Services after startup:
 
-- Airflow — `http://localhost:8080` (credentials: `admin` / `admin`)
-- Streamlit — `http://localhost:8501`
-- PostgreSQL — `localhost:5432`
+- Airflow webserver: `http://localhost:8080` (user: `admin`, password: `admin`)
+- Streamlit dashboard: `http://localhost:8501`
+- PostgreSQL: `localhost:5432`
+
+Trigger the pipeline manually from the Airflow UI or wait for the first scheduled hourly run.
 
 ---
 
@@ -164,23 +190,30 @@ pytest --cov=ingestion --cov=spark --cov-report=term-missing
 
 ## Design Decisions
 
-**httpx over requests** — `requests` has no native async support. `httpx` provides an identical API with full async support and HTTP/2, making the switch zero-friction.
+**httpx over requests**
+`requests` has no native async support. `httpx` provides an identical API surface with full `asyncio` compatibility and HTTP/2 support, making it the natural choice for the ingestion layer where concurrent market fetches are required.
 
-**PostgreSQL for all layers** — Keeps the local setup simple (one service) while still demonstrating medallion architecture through table separation. In production the silver layer would move to a columnar store or object storage with Delta Lake.
+**Medallion architecture in PostgreSQL**
+Keeping all three layers (raw, silver, gold) in a single PostgreSQL instance simplifies the local development environment without sacrificing architectural clarity. In a production setting, the silver layer would move to a columnar store (Redshift, BigQuery) or object storage with Delta Lake format.
 
-**PySpark for modest data volumes** — The data volume from Polymarket is not large enough to require distributed processing. PySpark is used deliberately to demonstrate familiarity with the DataFrame API, Window functions, and job submission patterns used at scale.
+**PySpark for modest data volumes**
+The volume of data from Polymarket does not require distributed processing in practice. PySpark is used deliberately to demonstrate familiarity with the DataFrame API, `Window` functions, and `spark-submit` job submission — patterns that apply directly at scale in production data platforms.
 
-**TaskFlow API in Airflow** — The DAG uses Airflow's `@task` decorator pattern instead of classic Operators where possible. It produces cleaner, more testable Python and avoids boilerplate.
+**TaskFlow API in Airflow**
+The DAG uses `@task` decorators instead of classic Operators wherever possible. This reduces boilerplate, makes each task a plain Python function that can be unit-tested in isolation, and allows XCom passing between tasks through return values rather than manual `xcom_push` and `xcom_pull` calls.
+
+**structlog for structured logging**
+All modules emit JSON-formatted log records via `structlog`, making logs directly ingestible by log aggregation tools (Datadog, Loki, CloudWatch) without additional parsing configuration.
 
 ---
 
 ## Status
 
-| Component | Status |
-|---|---|
-| Ingestion layer | In progress |
-| Spark processing | In progress |
-| Airflow DAG | In progress |
+| Component           | Status      |
+|---------------------|-------------|
+| Ingestion layer     | Complete    |
+| Spark processing    | In progress |
+| Airflow DAG         | Complete    |
 | Streamlit dashboard | In progress |
-| Docker Compose | In progress |
-| Tests | In progress |
+| Docker Compose      | In progress |
+| Tests               | In progress |
