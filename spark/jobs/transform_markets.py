@@ -1,167 +1,197 @@
-import os
-from datetime import datetime
+from __future__ import annotations
 
-from pyspark.sql import SparkSession, DataFrame
+import os
+
+import structlog
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
-from pyspark.sql.types import DoubleType
+
+logger = structlog.get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
+POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
+POSTGRES_DB = os.environ.get("POSTGRES_DB", "polymarket")
+POSTGRES_USER = os.environ.get("POSTGRES_USER", "postgres")
+POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "postgres")
+
+JDBC_URL = (
+    f"jdbc:postgresql://{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+)
+JDBC_DRIVER = "org.postgresql.Driver"
+JDBC_PROPERTIES = {
+    "user": POSTGRES_USER,
+    "password": POSTGRES_PASSWORD,
+    "driver": JDBC_DRIVER,
+}
+
+VOLATILITY_WINDOW_ROWS = 20
+ZSCORE_THRESHOLD = 2.0
 
 
-ANOMALY_THRESHOLD = 2.0
+# ---------------------------------------------------------------------------
+# Spark session
+# ---------------------------------------------------------------------------
 
-
-def create_spark_session() -> SparkSession:
+def get_spark_session() -> SparkSession:
     return (
         SparkSession.builder
         .appName("polymarket-transform")
-        .config("spark.jars.packages", "org.postgresql:postgresql:42.7.3")
+        .config("spark.sql.session.timeZone", "UTC")
         .getOrCreate()
     )
 
 
-def read_from_postgres(spark: SparkSession, table: str) -> DataFrame:
-    jdbc_url = (
-        f"jdbc:postgresql://{os.environ['POSTGRES_HOST']}:"
-        f"{os.environ.get('POSTGRES_PORT', '5432')}/"
-        f"{os.environ['POSTGRES_DB']}"
-    )
-    return (
-        spark.read
-        .format("jdbc")
-        .option("url", jdbc_url)
-        .option("dbtable", table)
-        .option("user", os.environ["POSTGRES_USER"])
-        .option("password", os.environ["POSTGRES_PASSWORD"])
-        .option("driver", "org.postgresql.Driver")
-        .load()
+# ---------------------------------------------------------------------------
+# Read
+# ---------------------------------------------------------------------------
+
+def read_raw_markets(spark: SparkSession) -> DataFrame:
+    """Read all raw records from the bronze layer."""
+    return spark.read.jdbc(
+        url=JDBC_URL,
+        table="raw_markets",
+        properties=JDBC_PROPERTIES,
     )
 
 
-def write_to_postgres(df: DataFrame, table: str, mode: str = "append") -> None:
-    jdbc_url = (
-        f"jdbc:postgresql://{os.environ['POSTGRES_HOST']}:"
-        f"{os.environ.get('POSTGRES_PORT', '5432')}/"
-        f"{os.environ['POSTGRES_DB']}"
-    )
-    (
-        df.write
-        .format("jdbc")
-        .option("url", jdbc_url)
-        .option("dbtable", table)
-        .option("user", os.environ["POSTGRES_USER"])
-        .option("password", os.environ["POSTGRES_PASSWORD"])
-        .option("driver", "org.postgresql.Driver")
-        .mode(mode)
-        .save()
-    )
+# ---------------------------------------------------------------------------
+# Transformations
+# ---------------------------------------------------------------------------
 
-
-def extract_fields(df: DataFrame) -> DataFrame:
+def parse_json_column(df: DataFrame) -> DataFrame:
     """
-    Parse relevant fields from the raw JSONB column into typed columns.
+    Expand the raw_json string column into typed fields.
+    The JSON structure mirrors the Polymarket CLOB /markets response.
     """
     return df.select(
         F.col("market_id"),
         F.col("question"),
         F.col("fetched_at"),
-        F.get_json_object(F.col("raw_json"), "$.volume24hr")
-         .cast(DoubleType()).alias("volume_24h"),
-        F.get_json_object(F.col("raw_json"), "$.tokens[0].price")
-         .cast(DoubleType()).alias("price_yes"),
+        F.get_json_object("raw_json", "$.volume24hr").cast("double").alias("volume_24h"),
+        F.get_json_object("raw_json", "$.tokens[0].price").cast("double").alias("price_yes"),
+        F.get_json_object("raw_json", "$.tokens[1].price").cast("double").alias("price_no"),
+    ).withColumn(
+        "mid_price",
+        (F.col("price_yes") + (F.lit(1.0) - F.col("price_no"))) / F.lit(2.0),
     )
 
 
 def compute_volatility(df: DataFrame) -> DataFrame:
     """
-    Rolling standard deviation of yes-price per market over the last 24 records.
+    Rolling standard deviation of mid_price per market.
+    Uses the last VOLATILITY_WINDOW_ROWS records ordered by fetched_at.
     """
     window = (
         Window
         .partitionBy("market_id")
-        .orderBy("fetched_at")
-        .rowsBetween(-23, 0)
+        .orderBy(F.col("fetched_at").cast("long"))
+        .rowsBetween(-VOLATILITY_WINDOW_ROWS, 0)
     )
     return df.withColumn(
         "price_volatility",
-        F.stddev("price_yes").over(window)
+        F.stddev("mid_price").over(window),
     )
 
 
 def compute_volume_avg(df: DataFrame) -> DataFrame:
-    """
-    Rolling mean of volume_24h per market over the last 24 records.
-    """
-    window = (
-        Window
-        .partitionBy("market_id")
-        .orderBy("fetched_at")
-        .rowsBetween(-23, 0)
-    )
+    """Volume-weighted average price per market across all fetched records."""
+    window = Window.partitionBy("market_id")
     return df.withColumn(
-        "volume_avg",
-        F.avg("volume_24h").over(window)
+        "avg_price",
+        F.avg("mid_price").over(window),
+    ).withColumn(
+        "avg_volume_24h",
+        F.avg("volume_24h").over(window),
     )
 
 
-def compute_zscore(df: DataFrame) -> DataFrame:
+def flag_anomalies(df: DataFrame) -> DataFrame:
     """
-    Z-score of current volume_24h relative to the market's own distribution.
-    Flags values more than ANOMALY_THRESHOLD standard deviations from the mean.
+    Z-score anomaly detection on mid_price per market.
+    A record is flagged when |z| > ZSCORE_THRESHOLD (default: 2.0).
+    Z = (value - mean) / stddev
     """
     window = Window.partitionBy("market_id")
-
-    df = df.withColumn("_vol_mean", F.avg("volume_24h").over(window))
-    df = df.withColumn("_vol_std",  F.stddev("volume_24h").over(window))
-
+    df = df.withColumn("_mean", F.mean("mid_price").over(window))
+    df = df.withColumn("_stddev", F.stddev("mid_price").over(window))
     df = df.withColumn(
-        "z_score",
+        "zscore",
         F.when(
-            F.col("_vol_std") > 0,
-            (F.col("volume_24h") - F.col("_vol_mean")) / F.col("_vol_std")
-        ).otherwise(F.lit(0.0))
+            F.col("_stddev") > 0,
+            (F.col("mid_price") - F.col("_mean")) / F.col("_stddev"),
+        ).otherwise(F.lit(0.0)),
     )
-
-    df = df.withColumn(
+    return df.withColumn(
         "is_anomaly",
-        F.abs(F.col("z_score")) > ANOMALY_THRESHOLD
-    )
-
-    return df.drop("_vol_mean", "_vol_std")
+        F.abs(F.col("zscore")) > ZSCORE_THRESHOLD,
+    ).drop("_mean", "_stddev")
 
 
-def build_silver_layer(df: DataFrame) -> DataFrame:
-    """
-    Chain all transformations and select the final silver schema.
-    """
-    df = extract_fields(df)
+def transform(df: DataFrame) -> DataFrame:
+    """Apply all transformations in order. Single entry point for the DAG."""
+    df = parse_json_column(df)
     df = compute_volatility(df)
     df = compute_volume_avg(df)
-    df = compute_zscore(df)
+    df = flag_anomalies(df)
+    return df.withColumn("processed_at", F.current_timestamp())
 
-    return df.select(
+
+# ---------------------------------------------------------------------------
+# Write
+# ---------------------------------------------------------------------------
+
+def write_silver(df: DataFrame) -> None:
+    """
+    Overwrite the silver_markets table with the fully transformed dataset.
+    Mode 'overwrite' is safe here because silver is always recomputed
+    from the append-only bronze layer.
+    """
+    silver_cols = [
         "market_id",
         "question",
-        F.col("price_yes").alias("avg_price"),
+        "fetched_at",
+        "mid_price",
+        "avg_price",
         "price_volatility",
         "volume_24h",
-        "volume_avg",
-        "z_score",
+        "avg_volume_24h",
+        "zscore",
         "is_anomaly",
-        F.current_timestamp().alias("processed_at"),
+        "processed_at",
+    ]
+    (
+        df.select(silver_cols)
+        .write
+        .jdbc(
+            url=JDBC_URL,
+            table="silver_markets",
+            mode="overwrite",
+            properties=JDBC_PROPERTIES,
+        )
     )
+    logger.info("silver_layer_written", rows=df.count())
 
 
-def run() -> None:
-    spark = create_spark_session()
-    spark.sparkContext.setLogLevel("WARN")
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
-    raw_df = read_from_postgres(spark, "raw_markets")
-    silver_df = build_silver_layer(raw_df)
-    write_to_postgres(silver_df, "silver_markets", mode="append")
+def main() -> None:
+    spark = get_spark_session()
+    logger.info("spark_job_started")
 
-    print(f"[{datetime.utcnow().isoformat()}] silver layer written: {silver_df.count()} rows")
+    raw = read_raw_markets(spark)
+    silver = transform(raw)
+    write_silver(silver)
+
+    logger.info("spark_job_completed")
     spark.stop()
 
 
 if __name__ == "__main__":
-    run()
+    main()
