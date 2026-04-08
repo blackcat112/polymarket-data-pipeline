@@ -33,41 +33,61 @@ def spark() -> SparkSession:
     )
 
 
-@pytest.fixture()
-def raw_df(spark: SparkSession):
-    """Minimal raw_markets DataFrame that mirrors the PostgreSQL table schema."""
-    data = [
-        {
-            "market_id": "market-A",
-            "question": "Will X happen?",
-            "fetched_at": "2025-01-01 00:00:00",
-            "raw_json": '{"volume24hr": "5000.0", "tokens": [{"price": "0.60"}, {"price": "0.40"}]}',
-        },
-        {
-            "market_id": "market-A",
-            "question": "Will X happen?",
-            "fetched_at": "2025-01-01 01:00:00",
-            "raw_json": '{"volume24hr": "6000.0", "tokens": [{"price": "0.65"}, {"price": "0.35"}]}',
-        },
-        {
-            "market_id": "market-B",
-            "question": "Will Y happen?",
-            "fetched_at": "2025-01-01 00:00:00",
-            "raw_json": '{"volume24hr": "1000.0", "tokens": [{"price": "0.20"}, {"price": "0.80"}]}',
-        },
+@pytest.fixture
+def sample_df(spark: SparkSession):
+    """
+    mkt1: 8 rows with tight volume (~1000) + 1 extreme outlier (9999).
+    With 9 rows, std stays low enough that 9999 exceeds z-score threshold of 2.0.
+    mkt2: 6 rows with stable volume (~500) — no anomaly expected.
+    """
+    schema = StructType([
+        StructField("market_id",  StringType(),    False),
+        StructField("question",   StringType(),    False),
+        StructField("price_yes",  DoubleType(),    True),
+        StructField("volume_24h", DoubleType(),    True),
+        StructField("fetched_at", TimestampType(), False),
+    ])
+    rows = [
+        # mkt1 — tight cluster + outlier
+        ("mkt1", "Will X happen?", 0.60, 1000.0, datetime(2025, 1, 1,  0, 0)),
+        ("mkt1", "Will X happen?", 0.61, 1050.0, datetime(2025, 1, 1,  1, 0)),
+        ("mkt1", "Will X happen?", 0.59,  980.0, datetime(2025, 1, 1,  2, 0)),
+        ("mkt1", "Will X happen?", 0.60, 1020.0, datetime(2025, 1, 1,  3, 0)),
+        ("mkt1", "Will X happen?", 0.62, 1010.0, datetime(2025, 1, 1,  4, 0)),
+        ("mkt1", "Will X happen?", 0.58,  990.0, datetime(2025, 1, 1,  5, 0)),
+        ("mkt1", "Will X happen?", 0.61, 1030.0, datetime(2025, 1, 1,  6, 0)),
+        ("mkt1", "Will X happen?", 0.60, 1005.0, datetime(2025, 1, 1,  7, 0)),
+        ("mkt1", "Will X happen?", 0.90, 9999.0, datetime(2025, 1, 1,  8, 0)),  # outlier
+        # mkt2 — stable, no anomaly
+        ("mkt2", "Will Y happen?", 0.30,  500.0, datetime(2025, 1, 1,  0, 0)),
+        ("mkt2", "Will Y happen?", 0.30,  505.0, datetime(2025, 1, 1,  1, 0)),
+        ("mkt2", "Will Y happen?", 0.31,  498.0, datetime(2025, 1, 1,  2, 0)),
+        ("mkt2", "Will Y happen?", 0.29,  510.0, datetime(2025, 1, 1,  3, 0)),
+        ("mkt2", "Will Y happen?", 0.30,  502.0, datetime(2025, 1, 1,  4, 0)),
+        ("mkt2", "Will Y happen?", 0.30,  497.0, datetime(2025, 1, 1,  5, 0)),
     ]
     return spark.createDataFrame(data)
 
+def test_compute_zscore_flags_outlier(sample_df) -> None:
+    """9999.0 volume should exceed z-score threshold given tight surrounding distribution."""
+    result = compute_zscore(sample_df)
+    anomalies = result.filter(result.is_anomaly).collect()
+    assert any(row.volume_24h == 9999.0 for row in anomalies)
 
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
-def test_parse_json_column_extracts_fields(raw_df):
-    result = parse_json_column(raw_df)
-    assert "mid_price" in result.columns
-    assert "price_yes" in result.columns
-    assert "volume_24h" in result.columns
+def test_compute_zscore_no_anomaly_for_stable_market(sample_df) -> None:
+    """mkt2 has a stable volume distribution — no rows should be flagged."""
+    result = compute_zscore(sample_df)
+    mkt2_anomalies = (
+        result.filter(
+            (result.market_id == "mkt2") & result.is_anomaly
+        )
+        .collect()
+    )
+    assert len(mkt2_anomalies) == 0
 
 
 def test_parse_json_column_mid_price_range(raw_df):
