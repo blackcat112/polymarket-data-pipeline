@@ -89,7 +89,7 @@ def compute_volatility(df: DataFrame) -> DataFrame:
     window = (
         Window
         .partitionBy("market_id")
-        .orderBy(F.col("fetched_at").cast("long"))
+        .orderBy(F.col("fetched_at").cast("timestamp").cast("long"))
         .rowsBetween(-VOLATILITY_WINDOW_ROWS, 0)
     )
     return df.withColumn(
