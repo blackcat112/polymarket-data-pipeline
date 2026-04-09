@@ -8,12 +8,21 @@ from __future__ import annotations
 
 import json
 from collections.abc import Generator
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from pyspark.sql import Row, SparkSession
 from pyspark.sql import functions as F
 
 from spark.jobs.transform_rewards import build_opportunities, compute_metrics, parse_raw_json
+
+# Recent timestamps guaranteed to be within the 7-day and 1-day windows
+# used by build_opportunities, regardless of when CI runs.
+_NOW = datetime.now(timezone.utc)
+_TS_RECENT      = (_NOW - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+_TS_RECENT_2    = (_NOW - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+_TS_RECENT_3    = (_NOW - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+_TS_RECENT_OLD  = (_NOW - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +51,7 @@ def _raw_row(
     condition_id: str = "0xabc",
     num_makers: int = 4,
     pool: float = 240.0,
-    fetched_at: str = "2025-01-01 00:00:00",
+    fetched_at: str = _TS_RECENT,
 ) -> dict:
     """Minimal raw_rewards row with a valid raw_json payload."""
     return {
@@ -155,14 +164,18 @@ class TestBuildOpportunities:
 
     build_opportunities expects a DataFrame already processed by
     parse_raw_json + compute_metrics, so we use _pipeline() as setup.
+
+    All fetched_at values use module-level _TS_RECENT* constants derived
+    from datetime.now() so they always fall within the 7-day and 1-day
+    filter windows regardless of when CI runs.
     """
 
     def test_returns_one_row_per_condition_id(self, spark: SparkSession) -> None:
         """Multiple snapshots of the same market collapse to a single gold row."""
         rows = [
-            _raw_row(condition_id="0xabc", fetched_at="2025-01-01 00:00:00"),
-            _raw_row(condition_id="0xabc", fetched_at="2025-01-01 01:00:00"),
-            _raw_row(condition_id="0xabc", fetched_at="2025-01-01 02:00:00"),
+            _raw_row(condition_id="0xabc", fetched_at=_TS_RECENT),
+            _raw_row(condition_id="0xabc", fetched_at=_TS_RECENT_2),
+            _raw_row(condition_id="0xabc", fetched_at=_TS_RECENT_3),
         ]
         df = _pipeline(spark, rows)
         gold = build_opportunities(df)
@@ -171,8 +184,8 @@ class TestBuildOpportunities:
     def test_latest_snapshot_wins_for_pool_diario(self, spark: SparkSession) -> None:
         """The gold row must reflect the most recent fetched_at snapshot."""
         rows = [
-            _raw_row(condition_id="0xabc", pool=100.0, fetched_at="2025-01-01 00:00:00"),
-            _raw_row(condition_id="0xabc", pool=999.0, fetched_at="2025-01-01 06:00:00"),
+            _raw_row(condition_id="0xabc", pool=100.0, fetched_at=_TS_RECENT_2),
+            _raw_row(condition_id="0xabc", pool=999.0, fetched_at=_TS_RECENT),
         ]
         df = _pipeline(spark, rows)
         gold = build_opportunities(df)
@@ -186,10 +199,8 @@ class TestBuildOpportunities:
         With identical rows: score_per_maker = 240/4 = 60 → avg_score_7d = 60.
         """
         rows = [
-            _raw_row(condition_id="0xabc", pool=240.0, num_makers=4,
-                     fetched_at="2025-01-01 00:00:00"),
-            _raw_row(condition_id="0xabc", pool=240.0, num_makers=4,
-                     fetched_at="2025-01-01 01:00:00"),
+            _raw_row(condition_id="0xabc", pool=240.0, num_makers=4, fetched_at=_TS_RECENT),
+            _raw_row(condition_id="0xabc", pool=240.0, num_makers=4, fetched_at=_TS_RECENT_2),
         ]
         df = _pipeline(spark, rows)
         gold = build_opportunities(df)
@@ -206,9 +217,9 @@ class TestBuildOpportunities:
     def test_multiple_markets_produce_multiple_rows(self, spark: SparkSession) -> None:
         """Each distinct condition_id produces exactly one gold row."""
         rows = [
-            _raw_row(condition_id="0xaaa", fetched_at="2025-01-01 00:00:00"),
-            _raw_row(condition_id="0xbbb", fetched_at="2025-01-01 00:00:00"),
-            _raw_row(condition_id="0xccc", fetched_at="2025-01-01 00:00:00"),
+            _raw_row(condition_id="0xaaa", fetched_at=_TS_RECENT),
+            _raw_row(condition_id="0xbbb", fetched_at=_TS_RECENT),
+            _raw_row(condition_id="0xccc", fetched_at=_TS_RECENT),
         ]
         df = _pipeline(spark, rows)
         gold = build_opportunities(df)
