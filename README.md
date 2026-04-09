@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.png" alt="Polymarket Rewards Pipeline" width="900"/>
+</p>
+
 # Polymarket Rewards Pipeline
 
 [![CI](https://github.com/blackcat112/polymarket-data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/blackcat112/polymarket-data-pipeline/actions/workflows/ci.yml)
@@ -14,43 +18,11 @@ The project originated as a live market-making bot that placed limit orders on b
 
 ## Pipeline Architecture
 
-```
-╔══════════════════════════════════════════════════════════════════════════╗
-║              POLYMARKET REWARDS DATA PIPELINE                           ║
-╠══════════════════════════════════════════════════════════════════════════╣
-║                                                                          ║
-║   ┌─────────────────┐   ┌──────────────────┐   ┌─────────────────────┐  ║
-║   │  LAYER 1        │   │  LAYER 2         │   │  LAYER 3            │  ║
-║   │  Ingestion      │   │  Processing      │   │  Orchestration      │  ║
-║   │  (Bronze)       │──▶│  (Silver / Gold) │──▶│  (Airflow DAG)      │  ║
-║   │                 │   │                  │   │                     │  ║
-║   │ Polymarket CLOB │   │ PySpark job      │   │ @hourly schedule    │  ║
-║   │ httpx async     │   │                  │   │                     │  ║
-║   │ tenacity retry  │   │ • score_per_maker│   │ task_1: extract     │  ║
-║   │ structlog JSON  │   │ • roi_1h_usdc    │   │ task_2: spark_job   │  ║
-║   │                 │   │ • competencia    │   │ task_3: load_gold   │  ║
-║   └────────┬────────┘   │   _rank          │   └──────────┬──────────┘  ║
-║            │            │ • simul_rewards  │              │             ║
-║            │            │   _7d / 24h      │              │             ║
-║            ▼            └────────┬─────────┘              │             ║
-║   ┌──────────────────────────────▼────────────────────────▼──────────┐  ║
-║   │                        PostgreSQL 16                             │  ║
-║   │                                                                   │  ║
-║   │   raw_rewards (bronze)  │  silver_rewards  │  rewards_opport...  │  ║
-║   │   full API payload      │  parsed + scored │  gold / upserted    │  ║
-║   └───────────────────────────────────┬───────────────────────────────┘  ║
-║                                       │                                  ║
-║                                       ▼                                  ║
-║                          ┌─────────────────────┐                         ║
-║                          │  LAYER 4            │                         ║
-║                          │  Streamlit Dashboard│                         ║
-║                          │                     │                         ║
-║                          │ • top opportunities │                         ║
-║                          │ • score/maker 72h   │                         ║
-║                          │ • daily pool dist.  │                         ║
-║                          └─────────────────────┘                         ║
-╚══════════════════════════════════════════════════════════════════════════╝
-```
+## Pipeline Architecture
+
+<p align="center">
+  <img src="docs/architecture.png" alt="Pipeline Architecture" width="850"/>
+</p>
 
 Data flows through three explicit quality tiers — **bronze → silver → gold** — following the medallion architecture pattern used in production data platforms.
 
