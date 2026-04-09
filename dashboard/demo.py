@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 import streamlit as st
 
 # ---------------------------------------------------------------------------
@@ -307,7 +306,6 @@ def make_anomalies() -> pd.DataFrame:
 
 def kpi_html(markets: pd.DataFrame, anomaly_count: int) -> str:
     total_vol = markets["avg_volume_24h"].sum()
-    avg_price = markets["avg_price"].mean()
     return f"""
     <div class="kpi-grid">
         <div class="kpi-card">
