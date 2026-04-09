@@ -1,0 +1,171 @@
+# =============================================================================
+# Polymarket Rewards Pipeline — Docker Compose
+# =============================================================================
+# Services:
+#   postgres      — shared database (bronze / silver / gold layers)
+#   airflow-init  — one-shot DB init + admin user creation
+#   airflow       — scheduler + webserver (LocalExecutor)
+#   spark-master  — Spark standalone master
+#   spark-worker  — Spark standalone worker
+#   dashboard     — Streamlit demo (no DB required)
+#
+# Quick start:
+#   cp .env.example .env
+#   docker compose up --build
+#
+# Airflow UI  → http://localhost:8080  (admin / admin)
+# Spark UI    → http://localhost:8081
+# Dashboard   → http://localhost:8501
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — shared data store
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: pipeline-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pipeline}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-polymarket}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Run all migrations on first boot (sorted by filename)
+      - ./database/migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pipeline} -d ${POSTGRES_DB:-polymarket}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Airflow — one-shot initializer
+  # ---------------------------------------------------------------------------
+  airflow-init:
+    image: apache/airflow:2.9.1-python3.11
+    container_name: pipeline-airflow-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-pipeline}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+    entrypoint: ["/bin/bash", "-c",
+      "airflow db migrate && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true"]
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Airflow — scheduler + webserver (LocalExecutor runs both in one container)
+  # ---------------------------------------------------------------------------
+  airflow:
+    image: apache/airflow:2.9.1-python3.11
+    container_name: pipeline-airflow
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-pipeline}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+      # Pipeline env vars forwarded to tasks
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-polymarket}
+      POSTGRES_USER: ${POSTGRES_USER:-pipeline}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POLYMARKET_API_BASE: ${POLYMARKET_API_BASE:-https://clob.polymarket.com}
+      SPARK_MASTER_URL: spark://spark-master:7077
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - airflow_logs:/opt/airflow/logs
+      - ./ingestion:/opt/airflow/ingestion:ro
+      - ./spark:/opt/airflow/spark:ro
+    ports:
+      - "8080:8080"
+    command: >-
+      bash -c "airflow scheduler &
+               airflow webserver"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Spark — standalone master
+  # ---------------------------------------------------------------------------
+  spark-master:
+    image: bitnami/spark:3.5
+    container_name: pipeline-spark-master
+    restart: unless-stopped
+    environment:
+      SPARK_MODE: master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+    ports:
+      - "7077:7077"   # Spark master RPC
+      - "8081:8080"   # Spark master UI
+    volumes:
+      - ./spark:/opt/spark-apps:ro
+
+  # ---------------------------------------------------------------------------
+  # Spark — worker
+  # ---------------------------------------------------------------------------
+  spark-worker:
+    image: bitnami/spark:3.5
+    container_name: pipeline-spark-worker
+    restart: unless-stopped
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 1G
+      SPARK_WORKER_CORES: 1
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+    volumes:
+      - ./spark:/opt/spark-apps:ro
+
+  # ---------------------------------------------------------------------------
+  # Dashboard — Streamlit (demo mode, no DB required)
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: pipeline-dashboard
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-polymarket}
+      POSTGRES_USER: ${POSTGRES_USER:-pipeline}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "8501:8501"
+    # Demo mode does not need postgres to be healthy
+    command: streamlit run dashboard/demo.py --server.port=8501 --server.address=0.0.0.0
+
+# =============================================================================
+# Named volumes
+# =============================================================================
+volumes:
+  postgres_data:
+  airflow_logs:
