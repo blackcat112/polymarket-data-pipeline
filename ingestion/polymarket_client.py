@@ -13,7 +13,6 @@ Differences from the original bot:
 """
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
@@ -30,22 +29,14 @@ from ingestion.models import RawRewardRecord, RewardMarket
 
 logger = structlog.get_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants — mirrors config.py values from the original bot
-# ---------------------------------------------------------------------------
 CLOB_BASE_URL    = "https://clob.polymarket.com"
 DEFAULT_TIMEOUT  = 10.0
 MAX_RETRIES      = 5
 
-# Filtering thresholds (same as original scanner.py)
-MIN_DAILY_REWARD = float(os.getenv("MIN_DAILY_REWARD", "50"))   # skip tiny pools
-MAX_MIN_SIZE     = float(os.getenv("MAX_MIN_SIZE",     "50"))   # skip high-barrier markets
-MAX_MAKERS       = int(os.getenv("MAX_MAKERS",         "20"))   # skip overcrowded books
+MIN_DAILY_REWARD = float(os.getenv("MIN_DAILY_REWARD", "50"))
+MAX_MIN_SIZE     = float(os.getenv("MAX_MIN_SIZE",     "50"))
+MAX_MAKERS       = int(os.getenv("MAX_MAKERS",         "20"))
 
-
-# ---------------------------------------------------------------------------
-# Low-level HTTP helper
-# ---------------------------------------------------------------------------
 
 @retry(
     retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TransportError)),
@@ -65,18 +56,7 @@ async def _get(
     return response.json()
 
 
-# ---------------------------------------------------------------------------
-# Parsing helpers
-# ---------------------------------------------------------------------------
-
 def _parse_midpoint(bids: list, asks: list, yes_price: float) -> float | None:
-    """Compute midpoint from order book. Falls back to yes_price.
-
-    Replicates the exact midpoint logic from scanner.py:
-      - Use (best_bid + best_ask) / 2 when book is healthy
-      - Fall back to yes_price from the market endpoint
-      - Return None if no valid price exists (market is skipped)
-    """
     if bids and asks:
         best_bid = float(bids[0]["price"])
         best_ask = float(asks[0]["price"])
@@ -92,10 +72,6 @@ def _build_reward_market(
     market_data: dict,
     book_data:   dict,
 ) -> RewardMarket | None:
-    """Build a RewardMarket from the three API responses.
-
-    Returns None if the market fails any filter (same filters as scanner.py).
-    """
     try:
         pool_diario = float(reward_data.get("total_daily_rate", 0))
         min_size    = float(reward_data.get("rewards_min_size", 999))
@@ -141,28 +117,12 @@ def _build_reward_market(
         return None
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
 async def fetch_rewarded_markets() -> tuple[list[RewardMarket], list[RawRewardRecord]]:
-    """Fetch all markets currently eligible for liquidity rewards.
-
-    Replicates scanner.get_rewarded_markets() with async I/O.
-    Applies the same three filters:
-      1. pool_diario >= MIN_DAILY_REWARD
-      2. min_size    <= MAX_MIN_SIZE
-      3. num_makers  <= MAX_MAKERS
-
-    Returns:
-        markets  — parsed RewardMarket objects sorted by score DESC
-        records  — RawRewardRecord DTOs ready for bronze-layer persistence
-    """
+    """Fetch all markets currently eligible for liquidity rewards."""
     markets: list[RewardMarket]     = []
     records: list[RawRewardRecord]  = []
 
     async with httpx.AsyncClient() as client:
-        # Step 1: get all currently rewarded markets
         reward_list = await _get(client, f"{CLOB_BASE_URL}/rewards/markets/current")
         candidates  = reward_list.get("data", [])
         logger.info("rewards_fetched", total=len(candidates))
@@ -172,7 +132,6 @@ async def fetch_rewarded_markets() -> tuple[list[RewardMarket], list[RawRewardRe
             if not condition_id:
                 continue
 
-            # Pre-filter by pool size and min_size before extra API calls
             pool     = float(reward_data.get("total_daily_rate", 0))
             min_size = float(reward_data.get("rewards_min_size", 999))
             if pool < MIN_DAILY_REWARD:
@@ -183,7 +142,6 @@ async def fetch_rewarded_markets() -> tuple[list[RewardMarket], list[RawRewardRe
                 continue
 
             try:
-                # Step 2: get full market details
                 market_data = await _get(client, f"{CLOB_BASE_URL}/markets/{condition_id}")
 
                 if not market_data.get("active") or market_data.get("closed"):
@@ -196,7 +154,6 @@ async def fetch_rewarded_markets() -> tuple[list[RewardMarket], list[RawRewardRe
                 if not token_id:
                     continue
 
-                # Step 3: get order book to count makers and compute midpoint
                 book_data  = await _get(
                     client,
                     f"{CLOB_BASE_URL}/book",
@@ -208,12 +165,10 @@ async def fetch_rewarded_markets() -> tuple[list[RewardMarket], list[RawRewardRe
                                  condition_id=condition_id, num_makers=num_makers)
                     continue
 
-                # Build domain model
                 market = _build_reward_market(reward_data, market_data, book_data)
                 if market is None:
                     continue
 
-                # Raw record for bronze layer — merge all three API responses
                 raw_payload = {
                     "reward":  reward_data,
                     "market":  market_data,
@@ -242,8 +197,6 @@ async def fetch_rewarded_markets() -> tuple[list[RewardMarket], list[RawRewardRe
                                condition_id=condition_id, error=str(exc))
                 continue
 
-    # Sort by score DESC — same as original scanner.py
     markets.sort(key=lambda m: m.score, reverse=True)
-
     logger.info("ingestion_complete", qualified=len(markets))
     return markets, records

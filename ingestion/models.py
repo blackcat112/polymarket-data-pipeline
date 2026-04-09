@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Optional
 
 
 @dataclass
@@ -25,14 +24,14 @@ class RewardMarket:
     condition_id: str
     token_id:     str
     question:     str
-    pool_diario:  float   # total_daily_rate — USDC paid per day to all makers
-    min_size:     float   # minimum order size to qualify for rewards
-    max_spread:   float   # maximum spread allowed to qualify
-    num_makers:   int     # current number of active makers in the order book
-    midpoint:     float   # (best_bid + best_ask) / 2
+    pool_diario:  float
+    min_size:     float
+    max_spread:   float
+    num_makers:   int
+    midpoint:     float
     yes_price:    float
     no_price:     float
-    score:        float   # pool_diario / max(num_makers, 1) — higher = less competition
+    score:        float
 
     @property
     def roi_1h_usdc(self) -> float:
@@ -53,7 +52,7 @@ class RawRewardRecord:
     condition_id: str
     token_id:     str
     question:     str
-    raw_json:     str        # JSON-serialised full API response
+    raw_json:     str
     fetched_at:   datetime = field(default_factory=datetime.utcnow)
 
     @classmethod

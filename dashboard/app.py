@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 import asyncio
-from datetime import datetime
 
 import asyncpg
 import pandas as pd
@@ -412,7 +411,6 @@ def render_header(df_opps: pd.DataFrame) -> None:
 
 
 def render_main(df_opps: pd.DataFrame, df_hist: pd.DataFrame) -> None:
-    # Asymmetric layout: 5/12 ranking + 7/12 charts
     col_rank, col_charts = st.columns([5, 7], gap="large")
 
     with col_rank:
@@ -453,7 +451,6 @@ def render_main(df_opps: pd.DataFrame, df_hist: pd.DataFrame) -> None:
 
     with col_charts:
         if not df_opps.empty and not df_hist.empty:
-            # Top market score timeline
             top_id = df_opps.iloc[0]["condition_id"]
             top_q = df_opps.iloc[0]["question"][:55] + "…"
 
@@ -466,7 +463,6 @@ def render_main(df_opps: pd.DataFrame, df_hist: pd.DataFrame) -> None:
 
             st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-            # Competition heatmap
             st.markdown('<div class="section-label">Competition heatmap — avg makers by hour (UTC)</div>', unsafe_allow_html=True)
             st.plotly_chart(
                 competition_heatmap(df_hist),
@@ -503,7 +499,6 @@ def main() -> None:
     render_main(df_opps, df_hist)
     render_footer(df_opps)
 
-    # Auto-refresh every 60s
     st.markdown(
         "<script>setTimeout(()=>window.location.reload(), 60000)</script>",
         unsafe_allow_html=True,
