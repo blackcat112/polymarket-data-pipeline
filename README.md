@@ -5,6 +5,7 @@
 # Polymarket Rewards Pipeline
 
 [![CI](https://github.com/blackcat112/polymarket-data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/blackcat112/polymarket-data-pipeline/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/blackcat112/polymarket-data-pipeline/branch/main/graph/badge.svg)](https://codecov.io/gh/blackcat112/polymarket-data-pipeline)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![Apache Spark 3.5](https://img.shields.io/badge/spark-3.5-orange.svg)](https://spark.apache.org/)
 [![Apache Airflow 2.9](https://img.shields.io/badge/airflow-2.9-017CEE.svg)](https://airflow.apache.org/)
@@ -15,8 +16,6 @@ An end-to-end **Data Engineering pipeline** built around [Polymarket](https://po
 The project originated as a live market-making bot that placed limit orders on both sides of the spread to earn USDC liquidity rewards. It has been refactored into a production-grade data pipeline covering the full data lifecycle: async ingestion from the CLOB API, batch transformation with Apache Spark, hourly orchestration via Apache Airflow, and a real-time Streamlit dashboard for analytical monitoring.
 
 ---
-
-## Pipeline Architecture
 
 ## Pipeline Architecture
 
@@ -110,7 +109,7 @@ A Streamlit application (`dashboard/demo.py`) auto-refreshes every 60 seconds an
 polymarket-data-pipeline/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                       # Lint + type check + tests on every push
+│       └── ci.yml                       # Lint + type check + tests + Codecov upload
 ├── airflow/
 │   └── dags/
 │       └── rewards_pipeline.py          # Hourly DAG: extract → spark → load
@@ -133,7 +132,7 @@ polymarket-data-pipeline/
 │   ├── jobs/
 │   │   └── transform_rewards.py         # PySpark: parse → score → rank → write
 │   └── tests/
-│       └── test_transform_rewards.py    # 7 unit tests, local SparkSession
+│       └── test_transform_rewards.py    # 13 unit tests, local SparkSession
 ├── .env.example
 ├── docker-compose.yml                   # 6 services: postgres, airflow, spark ×2, dashboard
 ├── pyproject.toml
@@ -190,7 +189,7 @@ pytest --cov=ingestion --cov=spark --cov-report=term-missing
 Keeping bronze, silver, and gold layers in a single PostgreSQL instance simplifies the local environment without sacrificing architectural clarity. In a production setting, the silver layer would move to a columnar store (Redshift, BigQuery) or object storage with Delta Lake.
 
 **PySpark for modest data volumes**
-Polymarket data does not require distributed processing in practice. PySpark is used deliberately to demonstrate familiarity with the DataFrame API, `Window` functions, and `spark-submit` — patterns that apply directly at scale in production platforms.
+Polymarket data does not require distributed processing in practice. PySpark is used deliberately to demonstrate familiarity with the DataFrame API, `Window` functions, and `spark-submit` — patterns that apply directly at scale in production platforms. Designed to handle ~10k market snapshots/day; the architecture scales horizontally by moving the silver layer to Delta Lake or BigQuery and pointing the same `spark-submit` job at a cloud cluster.
 
 **`score_per_maker` as the core metric**
 Raw `pool_diario` (total daily rewards) is misleading: a high pool shared among 20 makers is worse than a moderate pool with 2 makers. Dividing by `max(num_makers, 1)` normalises the opportunity and prevents division-by-zero — a deliberate defensive choice tested explicitly in the test suite.

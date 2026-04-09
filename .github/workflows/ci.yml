@@ -48,5 +48,12 @@ jobs:
       - name: Type check with mypy
         run: mypy ingestion/ spark/ --ignore-missing-imports
 
-      - name: Run tests
-        run: pytest --cov=ingestion --cov=spark --cov-report=term-missing
+      - name: Run tests with coverage
+        run: pytest --cov=ingestion --cov=spark --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
