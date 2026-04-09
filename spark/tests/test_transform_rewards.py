@@ -7,9 +7,10 @@ because they require a live JDBC connection.
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 
 import pytest
-from pyspark.sql import SparkSession
+from pyspark.sql import Row, SparkSession
 
 from spark.jobs.transform_rewards import compute_metrics, parse_raw_json
 
@@ -19,7 +20,7 @@ from spark.jobs.transform_rewards import compute_metrics, parse_raw_json
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def spark() -> SparkSession:  # type: ignore[return]
+def spark() -> Generator[SparkSession, None, None]:
     session = (
         SparkSession.builder
         .master("local[1]")
@@ -59,25 +60,28 @@ def _raw_row(condition_id: str = "0xabc", num_makers: int = 4, pool: float = 240
     }
 
 
+def _first(spark: SparkSession, data: dict) -> Row:
+    """Return the first Row of a single-row DataFrame, guaranteed non-None."""
+    row = spark.createDataFrame([data]).transform(parse_raw_json).first()
+    assert row is not None
+    return row
+
+
 # ---------------------------------------------------------------------------
 # parse_raw_json
 # ---------------------------------------------------------------------------
 
 class TestParseRawJson:
     def test_extracts_pool_diario(self, spark: SparkSession) -> None:
-        df_raw = spark.createDataFrame([_raw_row()])
-        df = parse_raw_json(df_raw)
-        row = df.first()
+        row = _first(spark, _raw_row())
         assert row["pool_diario"] == 240.0
 
     def test_extracts_num_makers(self, spark: SparkSession) -> None:
-        df_raw = spark.createDataFrame([_raw_row(num_makers=7)])
-        df = parse_raw_json(df_raw)
-        assert df.first()["num_makers"] == 7
+        row = _first(spark, _raw_row(num_makers=7))
+        assert row["num_makers"] == 7
 
     def test_drops_raw_json_column(self, spark: SparkSession) -> None:
-        df_raw = spark.createDataFrame([_raw_row()])
-        df = parse_raw_json(df_raw)
+        df = spark.createDataFrame([_raw_row()]).transform(parse_raw_json)
         assert "raw_json" not in df.columns
 
 
@@ -86,25 +90,24 @@ class TestParseRawJson:
 # ---------------------------------------------------------------------------
 
 class TestComputeMetrics:
+    def _compute(self, spark: SparkSession, data: dict) -> Row:
+        df = spark.createDataFrame([data]).transform(parse_raw_json).transform(compute_metrics)
+        row = df.first()
+        assert row is not None
+        return row
+
     def test_score_per_maker_correct(self, spark: SparkSession) -> None:
-        df_raw = spark.createDataFrame([_raw_row(num_makers=4, pool=240.0)])
-        df = compute_metrics(parse_raw_json(df_raw))
-        # score_per_maker = pool_diario / num_makers = 240 / 4 = 60
-        assert df.first()["score_per_maker"] == pytest.approx(60.0)
+        row = self._compute(spark, _raw_row(num_makers=4, pool=240.0))
+        assert row["score_per_maker"] == pytest.approx(60.0)
 
     def test_roi_1h_usdc_is_score_divided_by_24(self, spark: SparkSession) -> None:
-        df_raw = spark.createDataFrame([_raw_row(num_makers=4, pool=240.0)])
-        df = compute_metrics(parse_raw_json(df_raw))
-        # roi_1h = 60 / 24 = 2.5
-        assert df.first()["roi_1h_usdc"] == pytest.approx(2.5)
+        row = self._compute(spark, _raw_row(num_makers=4, pool=240.0))
+        assert row["roi_1h_usdc"] == pytest.approx(2.5)
 
     def test_num_makers_zero_doesnt_divide_by_zero(self, spark: SparkSession) -> None:
-        df_raw = spark.createDataFrame([_raw_row(num_makers=0, pool=120.0)])
-        df = compute_metrics(parse_raw_json(df_raw))
-        # greatest(0, 1.0) = 1.0 → score = 120
-        assert df.first()["score_per_maker"] == pytest.approx(120.0)
+        row = self._compute(spark, _raw_row(num_makers=0, pool=120.0))
+        assert row["score_per_maker"] == pytest.approx(120.0)
 
     def test_competencia_rank_column_exists(self, spark: SparkSession) -> None:
-        df_raw = spark.createDataFrame([_raw_row()])
-        df = compute_metrics(parse_raw_json(df_raw))
+        df = spark.createDataFrame([_raw_row()]).transform(parse_raw_json).transform(compute_metrics)
         assert "competencia_rank" in df.columns
