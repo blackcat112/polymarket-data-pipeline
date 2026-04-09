@@ -28,7 +28,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["ingestion*", "spark*", "dashboard*"]
-exclude = ["airflow*", "database*", "docs*", "tests*", "infra*", "modules*"]
+exclude = ["airflow*", "database*", "docs*", "infra*", "modules*"]
 
 [tool.ruff]
 line-length = 88
@@ -36,4 +36,4 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["ingestion/tests", "spark/tests", "tests"]
+testpaths = ["ingestion/tests", "spark/tests"]
