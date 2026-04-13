@@ -126,18 +126,20 @@ polymarket-data-pipeline/
 │   ├── polymarket_client.py             # Async CLOB API client
 │   ├── db.py                            # PostgreSQL persistence (bronze layer)
 │   └── tests/
-│       └── test_models.py               # 6 unit tests, no DB required
+│       ├── test_models.py               # 6 unit tests
+│       ├── test_db.py                   # 7 unit tests (asyncpg mocked)
+│       └── test_client.py               # 14 unit tests (httpx mocked via respx)
 ├── modules/                             # Original trading bot (reference only)
+│   └── README.md
 ├── spark/
 │   ├── jobs/
 │   │   └── transform_rewards.py         # PySpark: parse → score → rank → write
 │   └── tests/
-│       └── test_transform_rewards.py    # 13 unit tests, local SparkSession
+│       └── test_transform_rewards.py    # 14 unit tests, local SparkSession
 ├── .env.example
 ├── docker-compose.yml                   # 6 services: postgres, airflow, spark ×2, dashboard
-├── pyproject.toml
-├── requirements-dashboard.txt
-└── CHANGELOG.md
+├── LICENSE
+└── pyproject.toml
 ```
 
 ---
@@ -199,16 +201,3 @@ The DAG uses `@task` decorators instead of classic Operators. This reduces boile
 
 **structlog for structured logging**
 All modules emit JSON-formatted log records, making logs directly ingestible by aggregation tools (Datadog, Loki, CloudWatch) without additional parsing.
-
----
-
-## Status
-
-| Component | Status |
-|---|---|
-| Ingestion layer (bronze) | ✅ Complete |
-| Spark processing (silver / gold) | ✅ Complete |
-| Airflow DAG | ✅ Complete |
-| Streamlit dashboard | ✅ Complete |
-| Docker Compose (6 services) | ✅ Complete |
-| Unit tests (CI green) | ✅ Complete |
