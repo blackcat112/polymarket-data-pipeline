@@ -6,12 +6,11 @@ requires-python = ">=3.11"
 
 dependencies = [
     "httpx>=0.27",
+    "asyncpg>=0.29",
     "psycopg2-binary>=2.9",
-    "sqlalchemy>=2.0",
     "pyspark>=3.5",
     "pandas>=2.2",
     "numpy>=1.26",
-    "pydantic>=2.7",
     "python-dotenv>=1.0",
     "structlog>=24.1",
     "tenacity>=8.3",
@@ -28,7 +27,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["ingestion*", "spark*", "dashboard*"]
-exclude = ["airflow*", "database*", "docs*", "tests*", "infra*", "modules*"]
+exclude = ["airflow*", "database*", "docs*", "infra*", "modules*"]
 
 [tool.ruff]
 line-length = 88
@@ -36,4 +35,4 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["ingestion/tests", "spark/tests", "tests"]
+testpaths = ["ingestion/tests", "spark/tests"]

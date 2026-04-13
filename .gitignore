@@ -44,7 +44,8 @@ data/
 .DS_Store
 Thumbs.db
 
-# Testing
+# Coverage reports
 .coverage
+coverage.xml
 htmlcov/
 .pytest_cache/
